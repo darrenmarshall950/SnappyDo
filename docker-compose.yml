@@ -3,7 +3,7 @@
 # Usage:
 #   Local dev:    docker compose up
 #   Build only:   docker compose build
-#   Logs:         docker compose logs -f snappydo
+#   Logs:         docker compose logs -f
 #   Prod-like:    docker compose --profile prod up -d
 #
 # Image is the same in all profiles — only env + bindings differ.
@@ -25,11 +25,13 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - HOST=0.0.0.0
-      # App secrets (load from .env in production)
+      # Public env (browser-visible)
       - PUBLIC_SUPABASE_URL=${PUBLIC_SUPABASE_URL:-}
       - PUBLIC_SUPABASE_ANON_KEY=${PUBLIC_SUPABASE_ANON_KEY:-}
+      # Server secrets
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
-      - IMGPROXY_URL=${IMGPROXY_URL:-http://horizon.local:8080}
+      - IMGPROXY_URL=${IMGPROXY_URL:-http://imgproxy:8080}
+      - IMGPROXY_PUBLIC_URL=${IMGPROXY_PUBLIC_URL:-http://192.168.0.2:8080}
       - IMGPROXY_KEY=${IMGPROXY_KEY:-}
       - IMGPROXY_SALT=${IMGPROXY_SALT:-}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
@@ -39,15 +41,41 @@ services:
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
       - R2_BUCKET=${R2_BUCKET:-snappydo-uploads}
       - SESSION_SECRET=${SESSION_SECRET:-change-me-in-prod}
+      - UPLOAD_DIR=/app/uploads
+      - DB_PATH=/app/data/snappydo.db
     volumes:
-      # Mount uploads volume if self-hosting object storage
       - snappydo_uploads:/app/uploads
+      - snappydo_data:/app/data
+    depends_on:
+      imgproxy:
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       start_period: 10s
       retries: 3
+
+  # imgproxy — on-demand image transformation.
+  # Shares the uploads volume with snappydo so it can read uploaded files.
+  # In production, switch source to S3 (Cloudflare R2) and remove the bind mount.
+  imgproxy:
+    image: darthsim/imgproxy:latest
+    container_name: snappydo-imgproxy
+    restart: unless-stopped
+    environment:
+      IMGPROXY_KEY: ${IMGPROXY_KEY:-}
+      IMGPROXY_SALT: ${IMGPROXY_SALT:-}
+      IMGPROXY_LOCAL_FILESYSTEM_ENABLED: "true"
+      IMGPROXY_LOCAL_FILESYSTEM_ROOT: "/uploads"
+      IMGPROXY_BIND: ":8080"
+      IMGPROXY_FORMAT: "jpg,jpeg,png,webp,avif,heic"
+      IMGPROXY_MAX_SRC_DIMENSION: "8192"
+      IMGPROXY_PROCESSORS: "1"
+    volumes:
+      - snappydo_uploads:/uploads:ro
+    ports:
+      - "${IMGPROXY_PORT:-8080}:8080"
 
   # Optional local Postgres (for fully self-hosted mode, off by default)
   postgres:
@@ -64,22 +92,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
 
-  # Optional local imgproxy (use Horizon imgproxy by default via IMGPROXY_URL)
-  imgproxy:
-    image: darthsim/imgproxy:latest
-    container_name: snappydo-imgproxy
-    profiles: ["local-imgproxy"]
-    restart: unless-stopped
-    environment:
-      IMGPROXY_KEY: ${IMGPROXY_KEY:-}
-      IMGPROXY_SALT: ${IMGPROXY_SALT:-}
-      IMGPROXY_LOCAL_FILESYSTEM_ENABLED: "true"
-      IMGPROXY_BIND: ":8080"
-    volumes:
-      - ./uploads:/app/uploads:ro
-    ports:
-      - "8080:8080"
-
 volumes:
   snappydo_uploads:
+  snappydo_data:
   postgres_data:

@@ -56,6 +56,9 @@ COPY --from=build --chown=snappydo:snappydo /app/dist ./dist
 COPY --from=build --chown=snappydo:snappydo /app/node_modules ./node_modules
 COPY --from=build --chown=snappydo:snappydo /app/package.json ./package.json
 
+# Runtime data dirs — owned by snappydo user so the app can write SQLite + uploads
+RUN mkdir -p /app/data /app/uploads && chown -R snappydo:snappydo /app/data /app/uploads
+
 USER snappydo
 
 EXPOSE 3000

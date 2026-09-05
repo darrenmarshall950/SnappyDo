@@ -1,10 +1,10 @@
 ---
-import type { GalleryImage } from '../../data/galleries';
+import type { AdaptedImage } from '../../lib/image-adapter';
 import type { TemplateConfig } from '../../lib/gallery-schemas';
 import Lightbox from './Lightbox.astro';
 
 interface Props {
-  images: GalleryImage[];
+  images: AdaptedImage[];
   config: TemplateConfig;
   gallerySlug: string;
 }
@@ -32,11 +32,13 @@ const { images, config, gallerySlug } = Astro.props;
     >
       <img
         src={image.thumb}
+        srcset={image.srcset}
+        sizes={`(max-width: 720px) 50vw, ${Math.round(100 / config.columns)}vw`}
         alt={image.alt}
         loading={i < 6 ? 'eager' : 'lazy'}
         decoding="async"
-        width={600}
-        height={Math.round((600 * image.height) / image.width)}
+        width={image.width}
+        height={image.height}
       />
     </button>
   ))}

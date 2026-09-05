@@ -1,28 +1,62 @@
 ---
-// Dynamic gallery page — picks template from query param ?t=grid|masonry|lightbox
-import { getGalleryBySlug, galleries } from '../../data/galleries';
+// Dynamic gallery page — reads from DB, falls back to sample data if empty.
+import {
+  getGalleryBySlug,
+  listImagesForGallery,
+  type GalleryRow,
+  type ImageRow,
+} from '../../lib/db';
+import { adaptImage, type AdaptedImage } from '../../lib/image-adapter';
 import { templateDefaults, type GalleryTemplateId } from '../../lib/gallery-schemas';
 import GridGallery from '../../components/gallery/GridGallery.astro';
 import MasonryGallery from '../../components/gallery/MasonryGallery.astro';
 import LightboxGallery from '../../components/gallery/LightboxGallery.astro';
 import TemplatePicker from '../../components/gallery/TemplatePicker.astro';
+import { galleries as sampleGalleries } from '../../data/galleries';
+import { getGalleryBySlug as findSampleGallery } from '../../data/galleries';
 
 export const prerender = false;
 
 const { slug } = Astro.params;
-const gallery = slug ? getGalleryBySlug(slug) : undefined;
 
-if (!gallery) {
+const dbGallery = slug ? getGalleryBySlug(slug) : undefined;
+
+if (!dbGallery) {
   return Astro.redirect('/');
 }
 
+// Pick template — query param > gallery default > 'masonry'
 const templateParam = Astro.url.searchParams.get('t');
 const validTemplates: GalleryTemplateId[] = ['grid', 'masonry', 'lightbox'];
-const template: GalleryTemplateId = validTemplates.includes(templateParam as GalleryTemplateId)
+let template: GalleryTemplateId = validTemplates.includes(templateParam as GalleryTemplateId)
   ? (templateParam as GalleryTemplateId)
-  : 'masonry';
+  : (dbGallery.template_id as GalleryTemplateId);
+if (!validTemplates.includes(template)) template = 'masonry';
 
 const config = templateDefaults[template];
+
+// Read images from DB
+const dbImages = listImagesForGallery(dbGallery.id);
+let images: AdaptedImage[] = dbImages.map(adaptImage);
+
+// Fallback to sample data if DB has no images for this gallery yet
+if (images.length === 0) {
+  const sample = findSampleGallery(dbGallery.slug);
+  if (sample) {
+    images = sample.images.map((img, i) => ({
+      id: -1 - i,
+      src: img.src,
+      thumb: img.thumb,
+      srcset: `${img.thumb} 600w, ${img.src} 2000w`,
+      width: img.width,
+      height: img.height,
+      alt: img.alt,
+      exif: img.exif,
+    }));
+  }
+}
+
+const allDbGalleries = (await import('../../lib/db')).listGalleries();
 ---
 
 <!doctype html>
@@ -30,35 +64,50 @@ const config = templateDefaults[template];
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{gallery.title} — SnappyDo</title>
-    <meta name="description" content={gallery.description} />
+    <title>{dbGallery.title} — SnappyDo</title>
+    <meta name="description" content={dbGallery.description} />
   </head>
   <body>
     <header class="page-header">
       <a href="/" class="page-header__brand">SnappyDo</a>
       <nav class="page-header__nav">
-        {galleries.map((g) => (
-          <a href={`/g/${g.slug}`} class:list={['page-header__link', { 'is-current': g.slug === gallery.slug }]}>
+        {allDbGalleries.map((g: GalleryRow) => (
+          <a href={`/g/${g.slug}`} class:list={['page-header__link', { 'is-current': g.slug === dbGallery.slug }]}>
             {g.title}
           </a>
         ))}
+        <a href="/upload" class="page-header__upload">↑ Upload</a>
       </nav>
     </header>
 
     <main class="gallery-page">
       <section class="gallery-page__head">
-        <h1>{gallery.title}</h1>
-        <p>{gallery.description}</p>
-        <TemplatePicker current={template} gallerySlug={gallery.slug} />
+        <div>
+          <h1>{dbGallery.title}</h1>
+          <p>{dbGallery.description}</p>
+          <p class="gallery-page__meta">
+            <span><strong>{images.length}</strong> photos</span>
+            <span class="dot">·</span>
+            <span>Powered by imgproxy</span>
+          </p>
+        </div>
+        <TemplatePicker current={template} gallerySlug={dbGallery.slug} />
       </section>
 
-      {template === 'grid' && <GridGallery images={gallery.images} config={config} gallerySlug={gallery.slug} />}
-      {template === 'masonry' && <MasonryGallery images={gallery.images} config={config} gallerySlug={gallery.slug} />}
-      {template === 'lightbox' && <LightboxGallery images={gallery.images} config={config} gallerySlug={gallery.slug} />}
+      {images.length === 0 && (
+        <div class="gallery-page__empty">
+          <p>No photos in this gallery yet.</p>
+          <a href={`/upload`} class="empty-upload-btn">Upload the first photo →</a>
+        </div>
+      )}
+
+      {template === 'grid' && images.length > 0 && <GridGallery images={images} config={config} gallerySlug={dbGallery.slug} />}
+      {template === 'masonry' && images.length > 0 && <MasonryGallery images={images} config={config} gallerySlug={dbGallery.slug} />}
+      {template === 'lightbox' && images.length > 0 && <LightboxGallery images={images} config={config} gallerySlug={dbGallery.slug} />}
     </main>
 
     <footer class="page-footer">
-      <span>SnappyDo v0.2 — gallery template prototype</span>
+      <span>SnappyDo v0.3 — real uploads + imgproxy + EXIF</span>
       <span>Template: <code>{template}</code></span>
     </footer>
 
@@ -93,6 +142,7 @@ const config = templateDefaults[template];
       .page-header__nav {
         display: flex;
         gap: 0.25rem;
+        align-items: center;
       }
       .page-header__link {
         padding: 0.4375rem 0.875rem;
@@ -104,6 +154,16 @@ const config = templateDefaults[template];
       }
       .page-header__link:hover { color: #fafafa; background: rgba(255, 255, 255, 0.06); }
       .page-header__link.is-current { color: #fafafa; background: rgba(255, 255, 255, 0.1); }
+      .page-header__upload {
+        padding: 0.4375rem 0.875rem;
+        border-radius: 999px;
+        background: #fafafa;
+        color: #0a0a0a;
+        text-decoration: none;
+        font-size: 0.875rem;
+        font-weight: 500;
+        margin-left: 0.5rem;
+      }
       .gallery-page {
         max-width: 1400px;
         margin: 0 auto;
@@ -111,21 +171,48 @@ const config = templateDefaults[template];
       }
       .gallery-page__head {
         margin-bottom: 2.5rem;
-        display: grid;
-        gap: 1rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 2rem;
+        flex-wrap: wrap;
       }
       .gallery-page__head h1 {
         font-size: clamp(2rem, 5vw, 3.5rem);
         font-weight: 800;
-        margin: 0;
+        margin: 0 0 0.5rem;
         letter-spacing: -0.03em;
         line-height: 1.1;
       }
       .gallery-page__head p {
-        margin: 0;
+        margin: 0 0 0.75rem;
         color: #888;
         font-size: 1.0625rem;
         max-width: 640px;
+      }
+      .gallery-page__meta {
+        font-size: 0.8125rem;
+        color: #555;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .gallery-page__meta strong { color: #fafafa; font-weight: 600; }
+      .gallery-page__meta .dot { margin: 0 0.5rem; }
+      .gallery-page__empty {
+        text-align: center;
+        padding: 5rem 2rem;
+        border: 1px dashed #2a2a2a;
+        border-radius: 12px;
+        color: #888;
+      }
+      .empty-upload-btn {
+        display: inline-block;
+        margin-top: 1rem;
+        padding: 0.75rem 1.5rem;
+        background: #fafafa;
+        color: #0a0a0a;
+        border-radius: 999px;
+        text-decoration: none;
+        font-weight: 500;
       }
       .page-footer {
         display: flex;

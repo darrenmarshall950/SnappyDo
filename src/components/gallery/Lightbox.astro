@@ -1,9 +1,9 @@
 ---
-import type { GalleryImage } from '../../data/galleries';
+import type { AdaptedImage } from '../../lib/image-adapter';
 import type { TemplateConfig } from '../../lib/gallery-schemas';
 
 interface Props {
-  images: GalleryImage[];
+  images: AdaptedImage[];
   config: TemplateConfig;
   gallerySlug: string;
 }

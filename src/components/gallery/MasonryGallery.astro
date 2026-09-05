@@ -1,10 +1,10 @@
 ---
-import type { GalleryImage } from '../../data/galleries';
+import type { AdaptedImage } from '../../lib/image-adapter';
 import type { TemplateConfig } from '../../lib/gallery-schemas';
 import Lightbox from './Lightbox.astro';
 
 interface Props {
-  images: GalleryImage[];
+  images: AdaptedImage[];
   config: TemplateConfig;
   gallerySlug: string;
 }
@@ -28,19 +28,23 @@ const { images, config, gallerySlug } = Astro.props;
       <button class="gallery-masonry__thumb" type="button" aria-label={`Open ${image.alt}`}>
         <img
           src={image.thumb}
+          srcset={image.srcset}
+          sizes={`(max-width: 720px) 50vw, ${Math.round(100 / config.columns)}vw`}
           alt={image.alt}
           loading={i < 4 ? 'eager' : 'lazy'}
           decoding="async"
-          width={600}
-          height={Math.round((600 * image.height) / image.width)}
+          width={image.width}
+          height={image.height}
         />
       </button>
       {config.showCaptions && (
         <figcaption class="gallery-masonry__caption">
           <span class="gallery-masonry__alt">{image.alt}</span>
-          <span class="gallery-masonry__exif">
-            {image.exif.camera} · {image.exif.focalLength} · {image.exif.aperture} · 1/{image.exif.shutter.replace('1/', '')}s · ISO {image.exif.iso}
-          </span>
+          {image.exif.camera !== 'Unknown camera' && (
+            <span class="gallery-masonry__exif">
+              {image.exif.camera} · {image.exif.focalLength} · {image.exif.aperture} · {image.exif.shutter} · ISO {image.exif.iso}
+            </span>
+          )}
         </figcaption>
       )}
     </figure>
