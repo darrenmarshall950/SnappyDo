@@ -7,7 +7,7 @@ import {
   type ImageRow,
 } from '../../lib/db';
 import { adaptImage, type AdaptedImage } from '../../lib/image-adapter';
-import { templateDefaults, VALID_TEMPLATES, type GalleryTemplateId } from '../../lib/gallery-schemas';
+import { templateDefaults, VALID_TEMPLATES, type GalleryTemplateId, type FrameStyle } from '../../lib/gallery-schemas';
 import GridGallery from '../../components/gallery/GridGallery.astro';
 import MasonryGallery from '../../components/gallery/MasonryGallery.astro';
 import LightboxGallery from '../../components/gallery/LightboxGallery.astro';
@@ -20,6 +20,7 @@ import MosaicGallery from '../../components/gallery/MosaicGallery.astro';
 import CinemaGallery from '../../components/gallery/CinemaGallery.astro';
 import FramedGallery from '../../components/gallery/FramedGallery.astro';
 import TemplatePicker from '../../components/gallery/TemplatePicker.astro';
+import FramePicker from '../../components/gallery/FramePicker.astro';
 import { galleries as sampleGalleries } from '../../data/galleries';
 import { getGalleryBySlug as findSampleGallery } from '../../data/galleries';
 
@@ -41,6 +42,17 @@ let template: GalleryTemplateId = VALID_TEMPLATES.includes(templateParam as Gall
 if (!VALID_TEMPLATES.includes(template)) template = 'masonry';
 
 const config = templateDefaults[template];
+
+// Frame style — query param wins, then config default, then 'matte'
+const VALID_FRAMES: FrameStyle[] = ['none', 'matte', 'gallery', 'polaroid'];
+const frameParam = Astro.url.searchParams.get('frame');
+const frameStyle: FrameStyle = (VALID_FRAMES.includes(frameParam as FrameStyle)
+  ? (frameParam as FrameStyle)
+  : (config.frame ?? 'matte')) as FrameStyle;
+// Override config.frame with the chosen style for this render
+if (template === 'framed') {
+  config.frame = frameStyle;
+}
 
 // Read images from DB
 const dbImages = listImagesForGallery(dbGallery.id);
@@ -98,7 +110,10 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
             <span>Powered by imgproxy</span>
           </p>
         </div>
-        <TemplatePicker current={template} gallerySlug={dbGallery.slug} />
+        <div class="gallery-page__head-actions">
+          <TemplatePicker current={template} gallerySlug={dbGallery.slug} />
+          <FramePicker current={frameStyle} gallerySlug={dbGallery.slug} template={template} />
+        </div>
       </section>
 
       {images.length === 0 && (
@@ -209,6 +224,12 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
         font-size: 0.8125rem;
         color: #555;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .gallery-page__head-actions {
+        display: inline-flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        align-items: center;
       }
       .gallery-page__meta strong { color: #fafafa; font-weight: 600; }
       .gallery-page__meta .dot { margin: 0 0.5rem; }

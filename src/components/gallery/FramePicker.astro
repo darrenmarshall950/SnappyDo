@@ -1,0 +1,72 @@
+---
+/**
+ * FramePicker — switches the frame style for the Framed template.
+ *
+ * Sits next to the TemplatePicker. Adds ?frame=matte|gallery|polaroid to the
+ * gallery URL. Active state mirrors the current frame style.
+ */
+import type { GalleryTemplateId } from '../../lib/gallery-schemas';
+
+interface Props {
+  current: string; // current frame style
+  gallerySlug: string;
+  template: GalleryTemplateId; // only show when template is 'framed'
+}
+
+const { current, gallerySlug, template } = Astro.props;
+
+const FRAMES: { id: string; name: string; hint: string }[] = [
+  { id: 'matte', name: 'Matte', hint: 'Soft warm-white, museum print' },
+  { id: 'gallery', name: 'Gallery', hint: 'Dark wood with double gold rule' },
+  { id: 'polaroid', name: 'Polaroid', hint: 'Cream border with caption strip' },
+];
+
+if (template !== 'framed') return null;
+---
+
+<div class="frame-picker" data-frame-picker={gallerySlug}>
+  <span class="frame-picker__label">Frame</span>
+  {FRAMES.map((f) => (
+    <a
+      href={`/g/${gallerySlug}?t=framed&frame=${f.id}`}
+      class:list={['frame-picker__btn', { 'is-active': f.id === current }]}
+      data-frame={f.id}
+      title={f.hint}
+    >
+      {f.name}
+    </a>
+  ))}
+</div>
+
+<style>
+  .frame-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.375rem;
+    border: 1px solid #2a2a2a;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.02);
+    flex-wrap: wrap;
+  }
+  .frame-picker__label {
+    font-size: 0.6875rem;
+    color: #888;
+    padding: 0 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 500;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .frame-picker__btn {
+    padding: 0.4375rem 0.875rem;
+    border-radius: 999px;
+    color: #b4b4b4;
+    text-decoration: none;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+  .frame-picker__btn:hover { color: #fafafa; background: rgba(255, 255, 255, 0.06); }
+  .frame-picker__btn.is-active { background: #fafafa; color: #0a0a0a; }
+</style>
