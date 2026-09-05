@@ -15,6 +15,9 @@ import CoverGallery from '../../components/gallery/CoverGallery.astro';
 import CarouselGallery from '../../components/gallery/CarouselGallery.astro';
 import SlideshowGallery from '../../components/gallery/SlideshowGallery.astro';
 import JustifiedGallery from '../../components/gallery/JustifiedGallery.astro';
+import PolaroidGallery from '../../components/gallery/PolaroidGallery.astro';
+import MosaicGallery from '../../components/gallery/MosaicGallery.astro';
+import CinemaGallery from '../../components/gallery/CinemaGallery.astro';
 import TemplatePicker from '../../components/gallery/TemplatePicker.astro';
 import { galleries as sampleGalleries } from '../../data/galleries';
 import { getGalleryBySlug as findSampleGallery } from '../../data/galleries';
@@ -40,7 +43,7 @@ const config = templateDefaults[template];
 
 // Read images from DB
 const dbImages = listImagesForGallery(dbGallery.id);
-let images: AdaptedImage[] = dbImages.map(adaptImage);
+let images: AdaptedImage[] = dbImages.map((row) => adaptImage(row, config));
 
 // Fallback to sample data if DB has no images for this gallery yet
 if (images.length === 0) {
@@ -111,6 +114,9 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
       {template === 'carousel' && images.length > 0 && <CarouselGallery images={images} config={config} galleryTitle={dbGallery.title} />}
       {template === 'slideshow' && images.length > 0 && <SlideshowGallery images={images} config={config} galleryTitle={dbGallery.title} />}
       {template === 'justified' && images.length > 0 && <JustifiedGallery images={images} config={config} galleryTitle={dbGallery.title} />}
+      {template === 'polaroid' && images.length > 0 && <PolaroidGallery images={images} config={config} galleryTitle={dbGallery.title} />}
+      {template === 'mosaic' && images.length > 0 && <MosaicGallery images={images} config={config} galleryTitle={dbGallery.title} />}
+      {template === 'cinema' && images.length > 0 && <CinemaGallery images={images} config={config} galleryTitle={dbGallery.title} />}
     </main>
 
     <footer class="page-footer">

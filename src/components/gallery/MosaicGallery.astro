@@ -1,0 +1,137 @@
+---
+/**
+ * MosaicGallery — magazine-style mixed-size grid.
+ *
+ * Slot pattern repeats every 7 items, weighted toward a hero + secondary.
+ * Slot 0: spans 2 cols × 2 rows (hero)
+ * Slot 1: 1 col × 1 row
+ * Slot 2: 1 col × 2 rows (tall portrait)
+ * Slot 3-6: 1 col × 1 row
+ *
+ * Cycle restarts at 7. Result: a hero-led rhythm that mimics editorial
+ * magazine layouts (NYT, Vogue, The Verge).
+ */
+import type { AdaptedImage } from '../../lib/image-adapter';
+
+export interface Props {
+  images: AdaptedImage[];
+  config: import('../../lib/gallery-schemas').TemplateConfig;
+  galleryTitle: string;
+}
+
+const { images, config, galleryTitle } = Astro.props;
+
+function slot(i: number) {
+  const p = i % 7;
+  if (p === 0) return { col: 'span 2', row: 'span 2', label: 'hero' };
+  if (p === 2) return { col: 'span 1', row: 'span 2', label: 'portrait' };
+  return { col: 'span 1', row: 'span 1', label: 'std' };
+}
+---
+
+<div class="mosaic" data-template="mosaic" style={`background:${config.background};color:${config.textColor};`}>
+  <div class="mosaic__grid" style={`gap:${config.gap}px;`}>
+    {images.map((img, i) => {
+      const s = slot(i);
+      return (
+        <figure
+          class="mosaic__cell"
+          data-slot={s.label}
+          style={`grid-column:${s.col};grid-row:${s.row};`}
+          data-lightbox-trigger
+          data-image-id={img.id}
+        >
+          <img
+            src={img.thumb}
+            srcset={img.srcset}
+            sizes={s.label === 'hero' ? '(min-width: 1200px) 66vw, 100vw' : '(min-width: 1200px) 33vw, 50vw'}
+            alt={img.alt}
+            loading={i < 4 ? 'eager' : 'lazy'}
+          />
+          <figcaption class="mosaic__cap">
+            <span class="mosaic__cap-num">{String(i + 1).padStart(2, '0')}</span>
+            <span class="mosaic__cap-text">{img.alt || 'Untitled'}</span>
+          </figcaption>
+        </figure>
+      );
+    })}
+  </div>
+</div>
+
+<style>
+  .mosaic {
+    padding: 1.5rem;
+  }
+  .mosaic__grid {
+    max-width: 1500px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-auto-rows: 200px;
+    grid-auto-flow: dense;
+  }
+  /* Make slot pattern responsive on small screens */
+  @media (max-width: 800px) {
+    .mosaic__grid {
+      grid-template-columns: repeat(2, 1fr);
+      grid-auto-rows: 180px;
+    }
+    .mosaic__cell[data-slot="hero"] {
+      grid-column: span 2 !important;
+      grid-row: span 2 !important;
+    }
+    .mosaic__cell[data-slot="portrait"] {
+      grid-column: span 1 !important;
+      grid-row: span 2 !important;
+    }
+  }
+  .mosaic__cell {
+    position: relative;
+    overflow: hidden;
+    background: #111;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .mosaic__cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), filter 0.3s ease;
+  }
+  .mosaic__cell:hover img {
+    transform: scale(1.05);
+  }
+  .mosaic__cap {
+    position: absolute;
+    inset: auto 0 0 0;
+    padding: 1.25rem 1rem 0.75rem;
+    background: linear-gradient(to top, rgba(0,0,0,0.85), transparent);
+    color: #fafafa;
+    display: flex;
+    align-items: baseline;
+    gap: 0.625rem;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+  }
+  .mosaic__cell:hover .mosaic__cap {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .mosaic__cap-num {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6875rem;
+    color: #d4d4d4;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .mosaic__cap-text {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+</style>

@@ -43,6 +43,10 @@ services:
       - SESSION_SECRET=${SESSION_SECRET:-change-me-in-prod}
       - UPLOAD_DIR=/app/uploads
       - DB_PATH=/app/data/snappydo.db
+      # Watermark (proofing galleries)
+      - WATERMARK_TEXT=${WATERMARK_TEXT:-}
+      - WATERMARK_OPACITY=${WATERMARK_OPACITY:-30}
+      - WATERMARK_POSITION=${WATERMARK_POSITION:-southeast}
     volumes:
       - snappydo_uploads:/app/uploads
       - snappydo_data:/app/data

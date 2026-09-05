@@ -1,0 +1,243 @@
+---
+/**
+ * CinemaGallery — letterboxed 21:9 widescreen with metadata panel.
+ *
+ * Cinematic presentation: black bars top/bottom (letterboxing), wide
+ * aspect, slow fades between photos. Pairs well with landscape work.
+ * Optional auto-advance.
+ */
+import type { AdaptedImage } from '../../lib/image-adapter';
+
+export interface Props {
+  images: AdaptedImage[];
+  config: import('../../lib/gallery-schemas').TemplateConfig;
+  galleryTitle: string;
+}
+
+const { images, config, galleryTitle } = Astro.props;
+---
+
+<div class="cinema" data-template="cinema" style={`background:${config.background};color:${config.textColor};`}>
+  <div class="cinema__bar cinema__bar--top"></div>
+
+  <div class="cinema__viewport">
+    {images.map((img, i) => (
+      <article class="cinema__frame" data-cinema-frame data-index={i} aria-hidden={i !== 0 ? 'true' : 'false'}>
+        <div class="cinema__img-wrap" style={`aspect-ratio:${img.aspectRatio};`}>
+          <img
+            src={img.src}
+            srcset={img.srcset}
+            sizes="100vw"
+            alt={img.alt}
+            loading={i === 0 ? 'eager' : 'lazy'}
+          />
+        </div>
+        {img.exif?.camera && (
+          <div class="cinema__credit">
+            <span class="cinema__credit-line">{img.exif.camera}</span>
+            <span class="cinema__credit-line">
+              {img.exif.focalLength && <span>{img.exif.focalLength}</span>}
+              {img.exif.focalLength && img.exif.aperture && <span> · </span>}
+              {img.exif.aperture && <span>{img.exif.aperture}</span>}
+              {img.exif.iso && <span> · ISO {img.exif.iso}</span>}
+            </span>
+            <span class="cinema__credit-title">{img.alt || `Scene ${i + 1}`}</span>
+          </div>
+        )}
+      </article>
+    ))}
+  </div>
+
+  <div class="cinema__bar cinema__bar--bot"></div>
+
+  <div class="cinema__hud">
+    <p class="cinema__hud-title">{galleryTitle}</p>
+    <p class="cinema__hud-counter">
+      <span data-cinema-current>1</span> / {images.length}
+    </p>
+    <ol class="cinema__timeline">
+      {images.map((_, i) => (
+        <li>
+          <button class="cinema__t-mark" data-cinema-mark data-index={i} aria-current={i === 0 ? 'true' : 'false'} aria-label={`Scene ${i + 1}`}>
+            <span class="cinema__t-bar"></span>
+          </button>
+        </li>
+      ))}
+    </ol>
+  </div>
+</div>
+
+<script>
+  const root = document.querySelector('.cinema');
+  if (root) {
+    const frames = Array.from(root.querySelectorAll('[data-cinema-frame]')) as HTMLElement[];
+    const marks = Array.from(root.querySelectorAll('[data-cinema-mark]')) as HTMLButtonElement[];
+    const counter = root.querySelector('[data-cinema-current]') as HTMLElement;
+    let current = 0;
+    let timer: number | null = null;
+    const autoMs = 6500;
+
+    function go(i: number) {
+      current = (i + frames.length) % frames.length;
+      frames.forEach((f, idx) => {
+        const active = idx === current;
+        f.style.opacity = active ? '1' : '0';
+        f.style.zIndex = active ? '2' : '1';
+        f.setAttribute('aria-hidden', active ? 'false' : 'true');
+      });
+      marks.forEach((m, idx) => m.setAttribute('aria-current', idx === current ? 'true' : 'false'));
+      counter.textContent = String(current + 1);
+    }
+
+    function start() {
+      if (timer) return;
+      timer = window.setInterval(() => go(current + 1), autoMs);
+    }
+    function stop() {
+      if (timer) { clearInterval(timer); timer = null; }
+    }
+
+    marks.forEach((m) => m.addEventListener('click', () => { stop(); go(Number(m.dataset.index)); start(); }));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft') { stop(); go(current - 1); start(); }
+      if (e.key === 'ArrowRight') { stop(); go(current + 1); start(); }
+    });
+
+    // Animate timeline bars: fill across autoMs
+    function animateBars() {
+      marks.forEach((m) => {
+        const bar = m.querySelector('.cinema__t-bar') as HTMLElement;
+        bar.style.transition = 'none';
+        bar.style.transform = 'scaleX(0)';
+      });
+      requestAnimationFrame(() => {
+        const active = marks[current].querySelector('.cinema__t-bar') as HTMLElement;
+        active.style.transition = `transform ${autoMs}ms linear`;
+        active.style.transform = 'scaleX(1)';
+      });
+    }
+    const _go = go;
+    (go as any) = function(i: number) {
+      _go(i);
+      animateBars();
+    };
+    go(0);
+    start();
+  }
+</script>
+
+<style>
+  .cinema {
+    position: relative;
+    width: 100%;
+    min-height: 100vh;
+    background: #000;
+    overflow: hidden;
+  }
+  .cinema__bar {
+    height: 7vh;
+    background: #000;
+  }
+  .cinema__viewport {
+    position: relative;
+    width: 100%;
+    min-height: calc(86vh - 100px);
+    display: grid;
+    place-items: center;
+    padding: 1rem 4vw;
+  }
+  .cinema__frame {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 1rem 4vw;
+    display: grid;
+    place-items: center;
+    transition: opacity 1.4s ease;
+  }
+  .cinema__img-wrap {
+    max-width: min(100%, 1600px);
+    max-height: calc(86vh - 100px);
+    width: auto;
+    height: auto;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.7);
+    border-radius: 2px;
+  }
+  .cinema__img-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .cinema__credit {
+    position: absolute;
+    bottom: 2.5rem;
+    left: 4vw;
+    color: #d4d4d4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    line-height: 1.8;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+  .cinema__credit-title {
+    color: #fafafa;
+    font-size: 0.75rem;
+    margin-top: 0.5rem;
+    text-transform: none;
+    letter-spacing: 0.04em;
+  }
+  .cinema__hud {
+    position: absolute;
+    bottom: 7vh;
+    right: 4vw;
+    z-index: 10;
+    text-align: right;
+    transform: translateY(calc(100% + 1rem));
+  }
+  .cinema__hud-title {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: #d4d4d4;
+    margin: 0 0 0.25rem;
+  }
+  .cinema__hud-counter {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6875rem;
+    color: #888;
+    margin: 0 0 0.5rem;
+  }
+  .cinema__timeline {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    gap: 4px;
+    justify-content: flex-end;
+  }
+  .cinema__t-mark {
+    width: 32px;
+    height: 3px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    overflow: hidden;
+  }
+  .cinema__t-bar {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.2);
+    transform-origin: left center;
+    transform: scaleX(0);
+  }
+  .cinema__t-mark[aria-current="true"] .cinema__t-bar {
+    background: #fafafa;
+  }
+</style>

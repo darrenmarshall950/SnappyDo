@@ -23,6 +23,14 @@ export type ImgproxyOptions = {
   enlarge?: boolean;
   /** dpr scaling */
   dpr?: number;
+  /** text watermark (proves provenance / discourages download-and-claim) */
+  watermark?: {
+    text: string;
+    /** 0..100 (percent). Converted to imgproxy's 0..1 range. */
+    opacity?: number;
+    position?: 'north' | 'south' | 'east' | 'west' | 'northeast' | 'northwest' | 'southeast' | 'southwest' | 'center';
+    scale?: number; // 0..100, default ~15
+  };
 };
 
 /**
@@ -81,6 +89,30 @@ function buildProcessing(opts: ImgproxyOptions): string {
   if (opts.dpr) parts.push(`dpr:${opts.dpr}`);
   if (opts.quality) parts.push(`quality:${opts.quality}`);
   if (opts.format) parts.push(`format:${opts.format}`);
+
+  // NOTE: imgproxy open-source v3 only supports image-based watermarks (Pro
+  // feature for text). The `watermark:text:` URL option would be ignored
+  // and the parser mis-reads it as the basic `watermark:opacity` argument.
+  // We use the server-side /api/proof/[id] endpoint instead (see image-adapter).
+  // This option is kept here for when imgproxy Pro is added later.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  if (false && opts.watermark) {
+    const w = opts.watermark;
+    const encoded = Buffer.from(w.text, 'utf8')
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    parts.push(`watermark:text:${encoded}`);
+    if (w.opacity !== undefined) parts.push(`watermark:opacity:${(w.opacity / 100).toFixed(2)}`);
+    if (w.scale !== undefined) parts.push(`watermark:scale:${w.scale}`);
+    const posMap: Record<string, string> = {
+      north: 'no', south: 'so', east: 'ea', west: 'we',
+      northeast: 'noea', northwest: 'nowe', southeast: 'soea', southwest: 'sowe',
+      center: 'ce',
+    };
+    if (w.position) parts.push(`watermark:gravity:${posMap[w.position] || 'soea'}`);
+  }
 
   return parts.length ? parts.join('/') : 'plain';
 }

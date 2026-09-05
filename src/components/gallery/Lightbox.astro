@@ -38,6 +38,10 @@ const { images, config, gallerySlug } = Astro.props;
   <button class="lightbox__close" type="button" aria-label="Close (Esc)">
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 6l12 12M6 18L18 6"/></svg>
   </button>
+  <button class="lightbox__zoom" type="button" aria-label="Toggle zoom (click image)">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" data-zoom-icon-in><circle cx="11" cy="11" r="7"/><path d="M11 8v6M8 11h6M21 21l-4.35-4.35"/></svg>
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" data-zoom-icon-out style="display:none;"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M21 21l-4.35-4.35"/></svg>
+  </button>
   <button class="lightbox__nav lightbox__nav--prev" type="button" aria-label="Previous (←)">
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 6l-6 6 6 6"/></svg>
   </button>
@@ -46,12 +50,12 @@ const { images, config, gallerySlug } = Astro.props;
   </button>
 
   <figure class="lightbox__figure">
-    <div class="lightbox__img-wrap">
+    <div class="lightbox__img-wrap" data-img-wrap>
       <div class="lightbox__loader" data-loader>
         <div class="lightbox__loader-spinner"></div>
         <p class="lightbox__loader-text">Loading full resolution…</p>
       </div>
-      <img class="lightbox__image" alt="" decoding="async" />
+      <img class="lightbox__image" alt="" decoding="async" data-lightbox-img />
     </div>
     <figcaption class="lightbox__exif" data-exif>
       <span class="lightbox__exif-camera" data-field="camera"></span>
@@ -111,8 +115,14 @@ const { images, config, gallerySlug } = Astro.props;
     border-radius: 2px;
     opacity: 0;
     transition: opacity 0.4s ease;
+    transform-origin: center center;
+    will-change: transform;
   }
   .lightbox__image.is-loaded { opacity: 1; }
+  .lightbox__image.is-zoomable { cursor: zoom-in; }
+  .lightbox__image.is-zoomed { cursor: grab; }
+  .lightbox__image.is-zoomed:active { cursor: grabbing; }
+  .lightbox__image.is-panning { transition: none; }
   .lightbox__loader {
     position: absolute;
     inset: 0;
@@ -191,6 +201,14 @@ const { images, config, gallerySlug } = Astro.props;
     background: rgba(255, 255, 255, 0.16);
   }
   .lightbox__close { top: 1.25rem; right: 1.25rem; }
+  .lightbox__zoom {
+    top: 1.25rem;
+    right: 4.5rem;
+  }
+  .lightbox__zoom.is-active {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.32);
+  }
   .lightbox__nav--prev { left: 1.25rem; top: 50%; transform: translateY(-50%); }
   .lightbox__nav--prev:hover { transform: translateY(-50%) scale(1.05); }
   .lightbox__nav--next { right: 1.25rem; top: 50%; transform: translateY(-50%); }
@@ -214,18 +232,133 @@ const { images, config, gallerySlug } = Astro.props;
     const lb = document.getElementById(`lightbox-${gallerySlug}`);
     if (!lb) return;
 
-    const img = lb.querySelector('.lightbox__image');
+    const img = lb.querySelector('[data-lightbox-img]');
+    const wrap = lb.querySelector('[data-img-wrap]');
     const loader = lb.querySelector('[data-loader]');
     const closeBtn = lb.querySelector('.lightbox__close');
+    const zoomBtn = lb.querySelector('.lightbox__zoom');
     const prevBtn = lb.querySelector('.lightbox__nav--prev');
     const nextBtn = lb.querySelector('.lightbox__nav--next');
     const currentEl = lb.querySelector('[data-current]');
     const backdrop = lb.querySelector('.lightbox__backdrop');
     const downloadEl = lb.querySelector('[data-field="download"]');
+    const zoomIconIn = lb.querySelector('[data-zoom-icon-in]');
+    const zoomIconOut = lb.querySelector('[data-zoom-icon-out]');
 
     let current = 0;
     let lastFocus = null;
     const preloads = new Map();
+
+    // ---- Photo zoom state ----
+    let zoom = 1;             // current scale
+    let panX = 0;             // px translate
+    let panY = 0;
+    let isPanning = false;
+    let panStartX = 0;
+    let panStartY = 0;
+    let panOriginX = 0;
+    let panOriginY = 0;
+    const MIN_ZOOM = 1;
+    const MAX_ZOOM = 8;
+
+    function applyZoom(animate = true) {
+      if (animate) img.style.transition = 'transform 0.25s cubic-bezier(0.16,1,0.3,1), opacity 0.4s ease';
+      else img.style.transition = 'opacity 0.4s ease';
+      img.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+      img.classList.toggle('is-zoomed', zoom > 1.001);
+      img.classList.toggle('is-zoomable', zoom <= 1.001);
+      zoomBtn?.classList.toggle('is-active', zoom > 1.001);
+      if (zoomIconIn && zoomIconOut) {
+        zoomIconIn.style.display = zoom > 1.001 ? 'none' : '';
+        zoomIconOut.style.display = zoom > 1.001 ? '' : 'none';
+      }
+    }
+
+    function zoomTo(newZoom, cx, cy) {
+      const prev = zoom;
+      zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+      if (zoom <= 1.001) {
+        panX = 0; panY = 0;
+      } else if (cx !== undefined && cy !== undefined) {
+        // Zoom around (cx, cy) in image-relative coords
+        const rect = img.getBoundingClientRect();
+        const offsetX = cx - rect.left - rect.width / 2;
+        const offsetY = cy - rect.top - rect.height / 2;
+        const ratio = zoom / prev;
+        panX = (panX - offsetX) * ratio + offsetX;
+        panY = (panY - offsetY) * ratio + offsetY;
+      }
+      clampPan();
+      applyZoom(true);
+    }
+
+    function clampPan() {
+      if (zoom <= 1.001) return;
+      const rect = img.getBoundingClientRect();
+      // After zoom, image dimensions are scaled; pan limit so edges stay within view
+      const scaledW = rect.width * zoom;
+      const scaledH = rect.height * zoom;
+      const limitX = Math.max(0, (scaledW - rect.width) / 2);
+      const limitY = Math.max(0, (scaledH - rect.height) / 2);
+      panX = Math.max(-limitX, Math.min(limitX, panX));
+      panY = Math.max(-limitY, Math.min(limitY, panY));
+    }
+
+    function resetZoom() { zoom = 1; panX = 0; panY = 0; applyZoom(true); }
+
+    // Click image: zoom 2x at click point; double-click: reset
+    let clickTimer = null;
+    img.addEventListener('click', (e) => {
+      if (isPanning) return;
+      if (clickTimer) {
+        clearTimeout(clickTimer); clickTimer = null;
+        resetZoom();
+        return;
+      }
+      clickTimer = window.setTimeout(() => {
+        clickTimer = null;
+        if (zoom > 1.001) {
+          resetZoom();
+        } else {
+          zoomTo(2.5, e.clientX, e.clientY);
+        }
+      }, 220);
+    });
+
+    img.addEventListener('mousedown', (e) => {
+      if (zoom <= 1.001) return;
+      e.preventDefault();
+      isPanning = true;
+      panStartX = e.clientX;
+      panStartY = e.clientY;
+      panOriginX = panX;
+      panOriginY = panY;
+      img.classList.add('is-panning');
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!isPanning) return;
+      panX = panOriginX + (e.clientX - panStartX);
+      panY = panOriginY + (e.clientY - panStartY);
+      clampPan();
+      applyZoom(false);
+    });
+    window.addEventListener('mouseup', () => {
+      if (!isPanning) return;
+      isPanning = false;
+      img.classList.remove('is-panning');
+    });
+
+    // Wheel zoom around cursor
+    wrap.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const delta = -e.deltaY * 0.005;
+      zoomTo(zoom * (1 + delta), e.clientX, e.clientY);
+    }, { passive: false });
+
+    zoomBtn?.addEventListener('click', () => {
+      if (zoom > 1.001) resetZoom();
+      else zoomTo(2.5);
+    });
 
     function preload(i) {
       if (preloads.has(i)) return preloads.get(i);
@@ -262,6 +395,7 @@ const { images, config, gallerySlug } = Astro.props;
       img.src = image.src;
       img.alt = image.alt;
       currentEl.textContent = current + 1;
+      resetZoom();
 
       // Then swap to full-res
       const fullImg = new Image();

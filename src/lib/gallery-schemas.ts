@@ -15,7 +15,10 @@ export type GalleryTemplateId =
   | 'cover'
   | 'carousel'
   | 'slideshow'
-  | 'justified';
+  | 'justified'
+  | 'polaroid'
+  | 'mosaic'
+  | 'cinema';
 
 export type TemplateConfig = {
   gap: number; // pixels between images
@@ -31,6 +34,13 @@ export type TemplateConfig = {
   autoAdvanceMs?: number;
   /** Slideshow template: ken-burns zoom */
   kenBurns?: boolean;
+  /** Watermark applied to the lightbox hero (proves ownership, deters download-claim). */
+  watermark?: {
+    text: string; // e.g. photographer name, copyright line
+    opacity?: number; // 0..100
+    position?: 'north' | 'south' | 'east' | 'west' | 'northeast' | 'northwest' | 'southeast' | 'southwest' | 'center';
+    scale?: number; // 0..100, default ~15
+  } | null;
 };
 
 export const defaultConfig: TemplateConfig = {
@@ -111,6 +121,35 @@ export const justifiedConfig: TemplateConfig = {
   showExif: false,
 };
 
+export const polaroidConfig: TemplateConfig = {
+  ...defaultConfig,
+  gap: 32,
+  columns: 3,
+  aspectRatio: 'preserve',
+  showCaptions: true,
+  showExif: false,
+};
+
+export const mosaicConfig: TemplateConfig = {
+  ...defaultConfig,
+  gap: 8,
+  columns: 4,
+  aspectRatio: 'preserve',
+  showCaptions: true,
+  showExif: false,
+};
+
+export const cinemaConfig: TemplateConfig = {
+  ...defaultConfig,
+  gap: 0,
+  columns: 1,
+  aspectRatio: 'preserve',
+  showCaptions: false,
+  showExif: true,
+  autoAdvanceMs: 6500,
+  kenBurns: false,
+};
+
 export const templateDefaults: Record<GalleryTemplateId, TemplateConfig> = {
   grid: gridConfig,
   masonry: masonryConfig,
@@ -119,6 +158,9 @@ export const templateDefaults: Record<GalleryTemplateId, TemplateConfig> = {
   carousel: carouselConfig,
   slideshow: slideshowConfig,
   justified: justifiedConfig,
+  polaroid: polaroidConfig,
+  mosaic: mosaicConfig,
+  cinema: cinemaConfig,
 };
 
 export const templateMeta: Record<GalleryTemplateId, { name: string; description: string }> = {
@@ -150,6 +192,18 @@ export const templateMeta: Record<GalleryTemplateId, { name: string; description
     name: 'Justified',
     description: 'Variable-height rows justified to a fixed width. Flickr/500px style.',
   },
+  polaroid: {
+    name: 'Polaroid',
+    description: 'Scattered rotated photos on a dark background. Casual, scrapbook.',
+  },
+  mosaic: {
+    name: 'Mosaic',
+    description: 'Magazine-style mixed-size grid with hero-led rhythm.',
+  },
+  cinema: {
+    name: 'Cinema',
+    description: 'Letterboxed 21:9 widescreen, slow fades. Cinematic pace.',
+  },
 };
 
 export const VALID_TEMPLATES: GalleryTemplateId[] = [
@@ -160,4 +214,7 @@ export const VALID_TEMPLATES: GalleryTemplateId[] = [
   'carousel',
   'slideshow',
   'justified',
+  'polaroid',
+  'mosaic',
+  'cinema',
 ];
