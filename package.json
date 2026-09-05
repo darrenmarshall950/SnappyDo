@@ -1,0 +1,35 @@
+{
+  "name": "snappydo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A website builder for photographers — Framer-grade design + native photo-business features",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "start": "node ./dist/server/entry.mjs",
+    "test": "echo 'no tests yet' && exit 0",
+    "lint": "echo 'no lint yet' && exit 0",
+    "typecheck": "astro check",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up",
+    "docker:logs": "docker compose logs -f snappydo",
+    "docker:down": "docker compose down"
+  },
+  "dependencies": {
+    "astro": "^4.16.0",
+    "@astrojs/node": "^8.3.4",
+    "@astrojs/check": "^0.9.4",
+    "@supabase/supabase-js": "^2.45.4",
+    "stripe": "^17.3.1",
+    "framer-motion": "^11.11.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^22.7.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
