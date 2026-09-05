@@ -64,6 +64,22 @@ export function getDb(): Database.Database {
   const count = (db.prepare('SELECT COUNT(*) as n FROM galleries').get() as { n: number }).n;
   if (count === 0) {
     seedGalleries(db);
+  } else {
+    // Add any new seed galleries introduced in later versions (idempotent).
+    const insertIfMissing = db.prepare(`
+      INSERT INTO galleries (slug, title, description, template_id)
+      SELECT ?, ?, ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM galleries WHERE slug = ?)
+    `);
+    const newSeeds = [
+      { slug: 'safari', title: 'Safari — Serengeti', description: 'A week of golden-hour wildlife in Tanzania.', template_id: 'cover' },
+      { slug: 'city-of-london', title: 'City of London', description: 'Architectural studies around the Square Mile.', template_id: 'carousel' },
+      { slug: 'studio-light', title: 'Studio Light', description: 'A short study in single-source lighting.', template_id: 'slideshow' },
+      { slug: 'wild-coast', title: 'Wild Coast', description: 'Surf, sand, and shoreline.', template_id: 'justified' },
+    ];
+    for (const s of newSeeds) {
+      insertIfMissing.run(s.slug, s.title, s.description, s.template_id, s.slug);
+    }
   }
 
   _db = db;
@@ -79,6 +95,10 @@ function seedGalleries(db: Database.Database) {
     { slug: 'iceland-winter', title: 'Iceland — Winter Light', description: 'Eight days chasing aurora and winter storms around the Ring Road.', template_id: 'masonry' },
     { slug: 'tokyo-nights', title: 'Tokyo Nights', description: 'Neon, rain, and long exposures in Shibuya and Shinjuku.', template_id: 'grid' },
     { slug: 'studio-portraits', title: 'Studio Portraits', description: 'Available-light portraits, mostly prime lenses.', template_id: 'lightbox' },
+    { slug: 'safari', title: 'Safari — Serengeti', description: 'A week of golden-hour wildlife in Tanzania.', template_id: 'cover' },
+    { slug: 'city-of-london', title: 'City of London', description: 'Architectural studies around the Square Mile.', template_id: 'carousel' },
+    { slug: 'studio-light', title: 'Studio Light', description: 'A short study in single-source lighting.', template_id: 'slideshow' },
+    { slug: 'wild-coast', title: 'Wild Coast', description: 'Surf, sand, and shoreline.', template_id: 'justified' },
   ];
   for (const s of seeds) {
     seedStmt.run(s.slug, s.title, s.description, s.template_id);

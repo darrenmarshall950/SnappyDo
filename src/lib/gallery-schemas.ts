@@ -4,20 +4,33 @@
  * A gallery template defines a visual layout for displaying images.
  * Photographers pick one template per gallery, then tweak config.
  *
- * v0.2 templates: grid, masonry, lightbox.
- * v0.3+: justified, slideshow, editorial, mosaic.
+ * v0.2: grid, masonry, lightbox.
+ * v0.3: + cover, carousel, slideshow, justified.
  */
 
-export type GalleryTemplateId = 'grid' | 'masonry' | 'lightbox';
+export type GalleryTemplateId =
+  | 'grid'
+  | 'masonry'
+  | 'lightbox'
+  | 'cover'
+  | 'carousel'
+  | 'slideshow'
+  | 'justified';
 
 export type TemplateConfig = {
   gap: number; // pixels between images
-  columns: number; // for grid
+  columns: number; // for grid / justified / masonry
   aspectRatio: 'preserve' | 'square' | 'landscape' | 'portrait';
   showCaptions: boolean;
   showExif: boolean;
-  background: string; // hex color
-  textColor: string; // hex color
+  background: string;
+  textColor: string;
+  /** Hero position for cover template: 0..n */
+  coverIndex?: number;
+  /** Slideshow template: auto-advance in ms (0 = off) */
+  autoAdvanceMs?: number;
+  /** Slideshow template: ken-burns zoom */
+  kenBurns?: boolean;
 };
 
 export const defaultConfig: TemplateConfig = {
@@ -28,6 +41,8 @@ export const defaultConfig: TemplateConfig = {
   showExif: false,
   background: '#0a0a0a',
   textColor: '#fafafa',
+  autoAdvanceMs: 0,
+  kenBurns: false,
 };
 
 export const gridConfig: TemplateConfig = {
@@ -57,10 +72,53 @@ export const lightboxConfig: TemplateConfig = {
   showExif: false,
 };
 
+export const coverConfig: TemplateConfig = {
+  ...defaultConfig,
+  gap: 0,
+  columns: 1,
+  aspectRatio: 'preserve',
+  showCaptions: true,
+  showExif: true,
+  coverIndex: 0,
+};
+
+export const carouselConfig: TemplateConfig = {
+  ...defaultConfig,
+  gap: 0,
+  columns: 1,
+  aspectRatio: 'landscape',
+  showCaptions: true,
+  showExif: false,
+};
+
+export const slideshowConfig: TemplateConfig = {
+  ...defaultConfig,
+  gap: 0,
+  columns: 1,
+  aspectRatio: 'preserve',
+  showCaptions: true,
+  showExif: false,
+  autoAdvanceMs: 5000,
+  kenBurns: true,
+};
+
+export const justifiedConfig: TemplateConfig = {
+  ...defaultConfig,
+  gap: 4,
+  columns: 4,
+  aspectRatio: 'preserve',
+  showCaptions: false,
+  showExif: false,
+};
+
 export const templateDefaults: Record<GalleryTemplateId, TemplateConfig> = {
   grid: gridConfig,
   masonry: masonryConfig,
   lightbox: lightboxConfig,
+  cover: coverConfig,
+  carousel: carouselConfig,
+  slideshow: slideshowConfig,
+  justified: justifiedConfig,
 };
 
 export const templateMeta: Record<GalleryTemplateId, { name: string; description: string }> = {
@@ -73,7 +131,33 @@ export const templateMeta: Record<GalleryTemplateId, { name: string; description
     description: 'Variable-height tiles, no cropping. Editorial feel.',
   },
   lightbox: {
-    name: 'Lightbox-first',
+    name: 'Lightbox',
     description: 'Small thumbnails that expand on click. Image-forward.',
   },
+  cover: {
+    name: 'Cover',
+    description: 'Cinematic hero image with title. Click to enter gallery.',
+  },
+  carousel: {
+    name: 'Carousel',
+    description: 'Single-image showcase with prev/next. Editorial pacing.',
+  },
+  slideshow: {
+    name: 'Slideshow',
+    description: 'Full-bleed auto-advance with captions. Set the mood.',
+  },
+  justified: {
+    name: 'Justified',
+    description: 'Variable-height rows justified to a fixed width. Flickr/500px style.',
+  },
 };
+
+export const VALID_TEMPLATES: GalleryTemplateId[] = [
+  'grid',
+  'masonry',
+  'lightbox',
+  'cover',
+  'carousel',
+  'slideshow',
+  'justified',
+];

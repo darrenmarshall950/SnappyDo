@@ -1,0 +1,150 @@
+---
+/**
+ * CoverGallery — cinematic hero.
+ *
+ * Shows a single full-bleed image with title overlay. Clicking opens the
+ * full gallery in the lightbox. Designed for portfolio entry-points where
+ * a photographer wants one standout shot to lead with.
+ */
+import type { AdaptedImage } from '../../lib/image-adapter';
+
+export interface Props {
+  images: AdaptedImage[];
+  config: import('../../lib/gallery-schemas').TemplateConfig;
+  galleryTitle: string;
+}
+
+const { images, config, galleryTitle } = Astro.props;
+
+const coverIdx = Math.max(0, Math.min(config.coverIndex ?? 0, images.length - 1));
+const cover = images[coverIdx];
+const rest = images.filter((_, i) => i !== coverIdx);
+
+const fullSrc = cover.src; // 2000px WebP for the hero
+const thumbs = cover.srcset;
+---
+
+<div class="cover" data-template="cover" style={`background:${config.background};color:${config.textColor};`}>
+  <a href={`#enter-${cover.id}`} class="cover__hero" aria-label={`Open ${galleryTitle} gallery`}>
+    <img
+      src={cover.thumb}
+      srcset={thumbs}
+      sizes="100vw"
+      alt={cover.alt}
+      class="cover__img"
+      loading="eager"
+    />
+    <div class="cover__overlay">
+      <p class="cover__kicker">{galleryTitle}</p>
+      <h1 class="cover__title">Enter gallery</h1>
+      <p class="cover__count">{images.length} {images.length === 1 ? 'photo' : 'photos'} ↓</p>
+    </div>
+  </a>
+
+  <section id={`enter-${cover.id}`} class="cover__strip" aria-label="Full gallery">
+    {rest.map((img, i) => (
+      <a href={`#img-${img.id}`} class="cover__strip-item" data-lightbox-trigger>
+        <img
+          src={img.thumb}
+          srcset={img.srcset}
+          sizes="(min-width: 1200px) 33vw, (min-width: 600px) 50vw, 100vw"
+          alt={img.alt}
+          loading="lazy"
+          style={`aspect-ratio:${img.aspectRatio};`}
+        />
+        {img.exif?.camera && (
+          <span class="cover__strip-meta">{img.exif.camera}</span>
+        )}
+      </a>
+    ))}
+  </section>
+</div>
+
+<style>
+  .cover {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .cover__hero {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 92vh;
+    overflow: hidden;
+    text-decoration: none;
+    color: inherit;
+  }
+  .cover__img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 1.2s cubic-bezier(0.16, 1, 0.3, 1), filter 0.4s ease;
+  }
+  .cover__hero:hover .cover__img {
+    transform: scale(1.03);
+  }
+  .cover__overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 4rem 3rem;
+    background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 60%);
+  }
+  .cover__kicker {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: #d4d4d4;
+    margin: 0 0 0.5rem;
+  }
+  .cover__title {
+    font-size: clamp(2.5rem, 6vw, 5rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    margin: 0 0 0.5rem;
+    line-height: 1;
+  }
+  .cover__count {
+    font-size: 0.875rem;
+    color: #d4d4d4;
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .cover__strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 2px;
+    padding: 2px;
+  }
+  .cover__strip-item {
+    position: relative;
+    overflow: hidden;
+    display: block;
+    background: #111;
+  }
+  .cover__strip-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.6s ease, filter 0.3s ease;
+  }
+  .cover__strip-item:hover img {
+    transform: scale(1.04);
+  }
+  .cover__strip-meta {
+    position: absolute;
+    bottom: 0.5rem;
+    left: 0.5rem;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(8px);
+    color: #fff;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.6875rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+</style>

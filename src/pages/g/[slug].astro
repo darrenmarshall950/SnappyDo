@@ -7,10 +7,14 @@ import {
   type ImageRow,
 } from '../../lib/db';
 import { adaptImage, type AdaptedImage } from '../../lib/image-adapter';
-import { templateDefaults, type GalleryTemplateId } from '../../lib/gallery-schemas';
+import { templateDefaults, VALID_TEMPLATES, type GalleryTemplateId } from '../../lib/gallery-schemas';
 import GridGallery from '../../components/gallery/GridGallery.astro';
 import MasonryGallery from '../../components/gallery/MasonryGallery.astro';
 import LightboxGallery from '../../components/gallery/LightboxGallery.astro';
+import CoverGallery from '../../components/gallery/CoverGallery.astro';
+import CarouselGallery from '../../components/gallery/CarouselGallery.astro';
+import SlideshowGallery from '../../components/gallery/SlideshowGallery.astro';
+import JustifiedGallery from '../../components/gallery/JustifiedGallery.astro';
 import TemplatePicker from '../../components/gallery/TemplatePicker.astro';
 import { galleries as sampleGalleries } from '../../data/galleries';
 import { getGalleryBySlug as findSampleGallery } from '../../data/galleries';
@@ -27,11 +31,10 @@ if (!dbGallery) {
 
 // Pick template — query param > gallery default > 'masonry'
 const templateParam = Astro.url.searchParams.get('t');
-const validTemplates: GalleryTemplateId[] = ['grid', 'masonry', 'lightbox'];
-let template: GalleryTemplateId = validTemplates.includes(templateParam as GalleryTemplateId)
+let template: GalleryTemplateId = VALID_TEMPLATES.includes(templateParam as GalleryTemplateId)
   ? (templateParam as GalleryTemplateId)
   : (dbGallery.template_id as GalleryTemplateId);
-if (!validTemplates.includes(template)) template = 'masonry';
+if (!VALID_TEMPLATES.includes(template)) template = 'masonry';
 
 const config = templateDefaults[template];
 
@@ -104,6 +107,10 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
       {template === 'grid' && images.length > 0 && <GridGallery images={images} config={config} gallerySlug={dbGallery.slug} />}
       {template === 'masonry' && images.length > 0 && <MasonryGallery images={images} config={config} gallerySlug={dbGallery.slug} />}
       {template === 'lightbox' && images.length > 0 && <LightboxGallery images={images} config={config} gallerySlug={dbGallery.slug} />}
+      {template === 'cover' && images.length > 0 && <CoverGallery images={images} config={config} galleryTitle={dbGallery.title} />}
+      {template === 'carousel' && images.length > 0 && <CarouselGallery images={images} config={config} galleryTitle={dbGallery.title} />}
+      {template === 'slideshow' && images.length > 0 && <SlideshowGallery images={images} config={config} galleryTitle={dbGallery.title} />}
+      {template === 'justified' && images.length > 0 && <JustifiedGallery images={images} config={config} galleryTitle={dbGallery.title} />}
     </main>
 
     <footer class="page-footer">

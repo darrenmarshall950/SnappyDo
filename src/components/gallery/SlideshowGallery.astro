@@ -1,0 +1,237 @@
+---
+/**
+ * SlideshowGallery — full-bleed auto-advance with optional ken-burns.
+ *
+ * Mood-driven. Auto-advances if autoAdvanceMs > 0. Caption fades in
+ * over the bottom of the image. Click any image to pause; click button
+ * to resume. Ken-burns adds a slow zoom for cinematic feel.
+ */
+import type { AdaptedImage } from '../../lib/image-adapter';
+
+export interface Props {
+  images: AdaptedImage[];
+  config: import('../../lib/gallery-schemas').TemplateConfig;
+  galleryTitle: string;
+}
+
+const { images, config, galleryTitle } = Astro.props;
+const autoMs = config.autoAdvanceMs ?? 0;
+const kenBurns = config.kenBurns ?? false;
+---
+
+<div
+  class="slideshow"
+  data-template="slideshow"
+  data-auto-ms={autoMs}
+  data-ken-burns={kenBurns ? 'true' : 'false'}
+  style={`background:${config.background};color:${config.textColor};`}
+>
+  <div class="slideshow__viewport" data-slideshow-viewport>
+    {images.map((img, i) => (
+      <figure class="slideshow__slide" data-slideshow-slide data-index={i} aria-hidden={i !== 0 ? 'true' : 'false'}>
+        <img
+          src={img.src}
+          srcset={img.srcset}
+          sizes="100vw"
+          alt={img.alt}
+          class={`slideshow__img${kenBurns ? ' slideshow__img--kb' : ''}`}
+          loading={i === 0 ? 'eager' : 'lazy'}
+        />
+        <figcaption class="slideshow__caption">
+          <p class="slideshow__caption-title">{img.alt || `Image ${i + 1}`}</p>
+          {img.exif?.camera && (
+            <p class="slideshow__caption-meta">
+              {img.exif.camera}
+              {img.exif.lens && ` · ${img.exif.lens}`}
+            </p>
+          )}
+        </figcaption>
+      </figure>
+    ))}
+  </div>
+
+  <button class="slideshow__play" data-slideshow-play aria-label="Pause / resume slideshow">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" data-slideshow-icon-pause>
+      <rect x="6" y="5" width="4" height="14"/>
+      <rect x="14" y="5" width="4" height="14"/>
+    </svg>
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" data-slideshow-icon-play style="display:none;">
+      <polygon points="6,4 20,12 6,20" fill="currentColor"/>
+    </svg>
+  </button>
+
+  <div class="slideshow__hud">
+    <p class="slideshow__title">{galleryTitle}</p>
+    <p class="slideshow__counter">
+      <span data-slideshow-current>1</span> / <span>{images.length}</span>
+    </p>
+  </div>
+</div>
+
+<script>
+  const root = document.querySelector('[data-slideshow-viewport]')?.parentElement;
+  if (root) {
+    const slides = Array.from(root.querySelectorAll('[data-slideshow-slide]')) as HTMLElement[];
+    const counter = root.querySelector('[data-slideshow-current]') as HTMLElement;
+    const playBtn = root.querySelector('[data-slideshow-play]') as HTMLButtonElement;
+    const iconPause = playBtn.querySelector('[data-slideshow-icon-pause]') as HTMLElement;
+    const iconPlay = playBtn.querySelector('[data-slideshow-icon-play]') as HTMLElement;
+    const autoMs = Number(root.getAttribute('data-auto-ms') || '0');
+    const kenBurns = root.getAttribute('data-ken-burns') === 'true';
+    let current = 0;
+    let paused = false;
+    let timer: number | null = null;
+
+    function go(i: number) {
+      current = (i + slides.length) % slides.length;
+      slides.forEach((s, idx) => {
+        const active = idx === current;
+        s.style.opacity = active ? '1' : '0';
+        s.style.zIndex = active ? '2' : '1';
+        s.setAttribute('aria-hidden', active ? 'false' : 'true');
+        // Re-trigger ken-burns animation on the active slide
+        if (kenBurns && active) {
+          const img = s.querySelector('img');
+          if (img) {
+            img.style.animation = 'none';
+            // force reflow
+            void img.offsetWidth;
+            img.style.animation = '';
+          }
+        }
+      });
+      counter.textContent = String(current + 1);
+    }
+
+    function next() { go(current + 1); }
+
+    function start() {
+      if (timer) return;
+      paused = false;
+      iconPause.style.display = '';
+      iconPlay.style.display = 'none';
+      if (autoMs > 0) timer = window.setInterval(next, autoMs);
+    }
+    function stop() {
+      if (timer) { clearInterval(timer); timer = null; }
+      paused = true;
+      iconPause.style.display = 'none';
+      iconPlay.style.display = '';
+    }
+
+    playBtn.addEventListener('click', () => (paused ? start() : stop()));
+    slides.forEach((s) => s.addEventListener('click', () => (paused ? start() : stop())));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft') go(current - 1);
+      if (e.key === 'ArrowRight') next();
+      if (e.key === ' ') { e.preventDefault(); paused ? start() : stop(); }
+    });
+
+    // Swipe support
+    let touchStartX = 0;
+    root.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; });
+    root.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      if (Math.abs(dx) > 50) (dx > 0 ? go(current - 1) : next());
+    });
+
+    go(0);
+    if (autoMs > 0) start();
+  }
+</script>
+
+<style>
+  .slideshow {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    overflow: hidden;
+    background: #000;
+  }
+  .slideshow__viewport {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+  .slideshow__slide {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    transition: opacity 1.2s ease;
+    display: grid;
+    place-items: center;
+  }
+  .slideshow__img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    cursor: pointer;
+  }
+  .slideshow__img--kb {
+    animation: kenburns 8s ease-out forwards;
+  }
+  @keyframes kenburns {
+    from { transform: scale(1.0); }
+    to { transform: scale(1.08); }
+  }
+  .slideshow__caption {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 4rem 3rem 2rem;
+    background: linear-gradient(to top, rgba(0,0,0,0.75), transparent);
+    color: #fafafa;
+    pointer-events: none;
+  }
+  .slideshow__caption-title {
+    font-size: clamp(1.25rem, 2.5vw, 2rem);
+    font-weight: 600;
+    margin: 0 0 0.25rem;
+    letter-spacing: -0.01em;
+  }
+  .slideshow__caption-meta {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    color: #d4d4d4;
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+  .slideshow__play {
+    position: absolute;
+    top: 1.5rem;
+    right: 1.5rem;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #fafafa;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    z-index: 10;
+  }
+  .slideshow__hud {
+    position: absolute;
+    top: 1.5rem;
+    left: 1.5rem;
+    z-index: 10;
+  }
+  .slideshow__title {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: #fafafa;
+    margin: 0 0 0.25rem;
+  }
+  .slideshow__counter {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    color: #d4d4d4;
+    margin: 0;
+  }
+</style>

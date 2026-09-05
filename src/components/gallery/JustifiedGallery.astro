@@ -1,0 +1,119 @@
+---
+/**
+ * JustifiedGallery — Flickr/500px style.
+ *
+ * Variable-height images justified to a fixed row width. Each row's height
+ * is computed from the tallest image that fits within `rowHeight`, then the
+ * remaining images are scaled to match. Pure CSS for the small case (uses
+ * flex with calculated widths from aspect ratios), but we use a small JS
+ * pass for precision since pure-CSS justification is awkward.
+ */
+import type { AdaptedImage } from '../../lib/image-adapter';
+
+export interface Props {
+  images: AdaptedImage[];
+  config: import('../../lib/gallery-schemas').TemplateConfig;
+  galleryTitle: string;
+}
+
+const { images, config, galleryTitle } = Astro.props;
+---
+
+<div
+  class="justified"
+  data-template="justified"
+  data-row-height="180"
+  data-gap={String(config.gap)}
+  style={`background:${config.background};color:${config.textColor};`}
+>
+  <div class="justified__rows" data-justified-rows>
+    {images.map((img) => (
+      <a href={`#img-${img.id}`} class="justified__item" data-lightbox-trigger data-aspect={img.aspectRatio || '1.5'}>
+        <img
+          src={img.thumb}
+          srcset={img.srcset}
+          sizes="(min-width: 1200px) 25vw, (min-width: 800px) 33vw, (min-width: 500px) 50vw, 100vw"
+          alt={img.alt}
+          loading="lazy"
+        />
+      </a>
+    ))}
+  </div>
+</div>
+
+<script>
+  function justify() {
+    document.querySelectorAll<HTMLElement>('[data-justified-rows]').forEach((rows) => {
+      const rowHeight = Number(rows.parentElement?.getAttribute('data-row-height') || '180');
+      const gap = Number(rows.parentElement?.getAttribute('data-gap') || '4');
+      const items = Array.from(rows.children) as HTMLElement[];
+      rows.style.display = 'flex';
+      rows.style.flexWrap = 'wrap';
+      rows.style.gap = `${gap}px`;
+
+      let row: { el: HTMLElement; aspect: number; width: number }[] = [];
+      let rowAspectSum = 0;
+      const containerWidth = rows.clientWidth;
+
+      function flush() {
+        if (!row.length) return;
+        const totalAspect = rowAspectSum + (gap * (row.length - 1)) / rowHeight;
+        const targetRowWidth = containerWidth;
+        const scale = targetRowWidth / (totalAspect * rowHeight);
+        let height = rowHeight * scale;
+        // Cap to 1.5x to avoid huge rows
+        height = Math.min(height, rowHeight * 1.5);
+        row.forEach((item) => {
+          item.el.style.width = `${item.aspect * height}px`;
+          item.el.style.height = `${height}px`;
+        });
+        row = [];
+        rowAspectSum = 0;
+      }
+
+      items.forEach((item) => {
+        const aspect = Number(item.getAttribute('data-aspect') || '1.5');
+        if (rowAspectSum + aspect > (containerWidth / rowHeight) * 1.0 && row.length) {
+          flush();
+        }
+        row.push({ el: item, aspect, width: 0 });
+        rowAspectSum += aspect;
+      });
+      flush();
+    });
+  }
+  // Run on load and resize
+  justify();
+  let resizeT: number | null = null;
+  window.addEventListener('resize', () => {
+    if (resizeT) clearTimeout(resizeT);
+    resizeT = window.setTimeout(justify, 100);
+  });
+  // Re-run after images load (aspect ratios from data are stable, but images may reflow)
+  window.addEventListener('load', justify);
+</script>
+
+<style>
+  .justified {
+    width: 100%;
+  }
+  .justified__rows {
+    padding: 1px;
+  }
+  .justified__item {
+    display: block;
+    overflow: hidden;
+    position: relative;
+    background: #111;
+    flex: 0 0 auto;
+    transition: opacity 0.2s ease;
+  }
+  .justified__item:hover { opacity: 0.92; }
+  .justified__item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.4s ease;
+  }
+  .justified__item:hover img { transform: scale(1.04); }
+</style>
