@@ -18,6 +18,7 @@ import JustifiedGallery from '../../components/gallery/JustifiedGallery.astro';
 import PolaroidGallery from '../../components/gallery/PolaroidGallery.astro';
 import MosaicGallery from '../../components/gallery/MosaicGallery.astro';
 import CinemaGallery from '../../components/gallery/CinemaGallery.astro';
+import FramedGallery from '../../components/gallery/FramedGallery.astro';
 import TemplatePicker from '../../components/gallery/TemplatePicker.astro';
 import { galleries as sampleGalleries } from '../../data/galleries';
 import { getGalleryBySlug as findSampleGallery } from '../../data/galleries';
@@ -117,10 +118,11 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
       {template === 'polaroid' && images.length > 0 && <PolaroidGallery images={images} config={config} galleryTitle={dbGallery.title} />}
       {template === 'mosaic' && images.length > 0 && <MosaicGallery images={images} config={config} galleryTitle={dbGallery.title} />}
       {template === 'cinema' && images.length > 0 && <CinemaGallery images={images} config={config} galleryTitle={dbGallery.title} />}
+      {template === 'framed' && images.length > 0 && <FramedGallery images={images} config={config} galleryTitle={dbGallery.title} />}
     </main>
 
     <footer class="page-footer">
-      <span>SnappyDo v0.3 — real uploads + imgproxy + EXIF</span>
+      <span>SnappyDo v0.4 — 11 templates + photo zoom + watermarks</span>
       <span>Template: <code>{template}</code></span>
     </footer>
 

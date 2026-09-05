@@ -1,0 +1,203 @@
+---
+/**
+ * FramedGallery — each photo in a subtle decorative frame.
+ *
+ * Looks like fine-art prints on a gallery wall. The frame is CSS-only so it
+ * scales with layout (no extra image processing). Hover lifts the frame
+ * slightly. Three frame styles:
+ *   - matte:   soft warm-white border (museum print, classic)
+ *   - gallery: dark wood-tone border with double-rule bevel
+ *   - polaroid: cream border with caption strip below (lives here, not in polaroid template)
+ *
+ * Frame style is set via config.frame; falls back to 'matte'.
+ */
+import type { AdaptedImage } from '../../lib/image-adapter';
+import type { FrameStyle } from '../../lib/gallery-schemas';
+
+export interface Props {
+  images: AdaptedImage[];
+  config: import('../../lib/gallery-schemas').TemplateConfig;
+  galleryTitle: string;
+}
+
+const { images, config, galleryTitle } = Astro.props;
+const frameStyle: FrameStyle = config.frame && config.frame !== 'none' ? config.frame : 'matte';
+---
+
+<div class={`framed framed--${frameStyle}`} data-template="framed" style={`background:${config.background};color:${config.textColor};`}>
+  <header class="framed__head">
+    <p class="framed__kicker">{galleryTitle}</p>
+    <h1 class="framed__title">Gallery</h1>
+    <p class="framed__sub">Frame: <em>{frameStyle}</em></p>
+  </header>
+
+  <div class="framed__grid" style={`gap:${config.gap}px;`}>
+    {images.map((img, i) => (
+      <figure
+        class={`framed__piece framed__piece--${frameStyle}`}
+        data-lightbox-trigger
+        data-image-id={img.id}
+      >
+        <div class="framed__matte">
+          <img
+            src={img.thumb}
+            srcset={img.srcset}
+            sizes="(min-width: 1200px) 50vw, 100vw"
+            alt={img.alt}
+            loading={i < 4 ? 'eager' : 'lazy'}
+            style={`aspect-ratio:${img.aspectRatio};`}
+          />
+        </div>
+        {config.showCaptions && (
+          <figcaption class="framed__cap">{img.alt}</figcaption>
+        )}
+      </figure>
+    ))}
+  </div>
+</div>
+
+<style>
+  .framed {
+    padding: 4rem 2rem 6rem;
+    min-height: 100vh;
+  }
+  .framed__head {
+    text-align: center;
+    margin-bottom: 3.5rem;
+  }
+  .framed__kicker {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.24em;
+    color: #888;
+    margin: 0 0 0.5rem;
+  }
+  .framed__title {
+    font-size: clamp(2rem, 5vw, 3.25rem);
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    margin: 0 0 0.25rem;
+  }
+  .framed__sub {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6875rem;
+    color: #555;
+    margin: 0;
+    letter-spacing: 0.1em;
+  }
+  .framed__sub em { color: #d4d4d4; font-style: normal; }
+  .framed__grid {
+    max-width: 1500px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    align-items: end;
+  }
+
+  /* ==== Matte frame (default) — soft warm-white, classic museum print ==== */
+  .framed__piece--matte .framed__matte {
+    padding: 28px 28px 36px;
+    background: linear-gradient(180deg, #faf6ee 0%, #efe7d6 100%);
+    box-shadow:
+      0 1px 1px rgba(0,0,0,0.04),
+      0 6px 18px rgba(0,0,0,0.25),
+      0 22px 50px rgba(0,0,0,0.18);
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.35s ease;
+  }
+  .framed__piece--matte:hover .framed__matte {
+    transform: translateY(-4px) rotate(-0.25deg);
+    box-shadow:
+      0 2px 2px rgba(0,0,0,0.06),
+      0 12px 28px rgba(0,0,0,0.35),
+      0 36px 72px rgba(0,0,0,0.22);
+  }
+  .framed__piece--matte .framed__matte img {
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.08);
+  }
+
+  /* ==== Gallery frame — dark wood-tone, double-rule bevel ==== */
+  .framed__piece--gallery .framed__matte {
+    padding: 18px;
+    background:
+      linear-gradient(180deg, #1f1a14 0%, #0e0c08 100%);
+    position: relative;
+    box-shadow:
+      0 4px 12px rgba(0,0,0,0.4),
+      0 24px 48px rgba(0,0,0,0.3),
+      inset 0 0 0 1px rgba(255,255,255,0.04);
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.35s ease;
+  }
+  .framed__piece--gallery .framed__matte::before {
+    content: '';
+    position: absolute;
+    inset: 8px;
+    border: 1px solid rgba(212, 175, 55, 0.35); /* gold rule */
+    pointer-events: none;
+  }
+  .framed__piece--gallery .framed__matte::after {
+    content: '';
+    position: absolute;
+    inset: 12px;
+    border: 1px solid rgba(212, 175, 55, 0.18); /* second inner rule */
+    pointer-events: none;
+  }
+  .framed__piece--gallery:hover .framed__matte {
+    transform: translateY(-3px);
+    box-shadow:
+      0 8px 20px rgba(0,0,0,0.5),
+      0 32px 64px rgba(0,0,0,0.4);
+  }
+
+  /* ==== Polaroid frame — cream with caption strip ==== */
+  .framed__piece--polaroid .framed__matte {
+    padding: 14px 14px 56px;
+    background: #f5f1e8;
+    box-shadow:
+      0 2px 4px rgba(0,0,0,0.15),
+      0 12px 24px rgba(0,0,0,0.25);
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.35s ease;
+  }
+  .framed__piece--polaroid:hover .framed__matte {
+    transform: rotate(-1deg) translateY(-4px);
+    box-shadow:
+      0 4px 8px rgba(0,0,0,0.2),
+      0 20px 40px rgba(0,0,0,0.35);
+  }
+
+  /* Image inside all frames */
+  .framed__matte img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    background: #2a2a2a;
+  }
+  .framed__cap {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6875rem;
+    text-align: center;
+    color: #888;
+    margin-top: 0.875rem;
+    letter-spacing: 0.06em;
+  }
+  .framed__piece--matte .framed__cap {
+    font-family: 'Times New Roman', Georgia, serif;
+    font-style: italic;
+    color: #5a4a3a;
+    font-size: 0.8125rem;
+  }
+  .framed__piece--polaroid .framed__cap {
+    position: absolute;
+    bottom: 14px;
+    left: 14px;
+    right: 14px;
+    margin: 0;
+    font-family: 'Marker Felt', 'Comic Sans MS', cursive;
+    font-size: 0.875rem;
+    color: #4a3a2a;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .framed__piece--polaroid { position: relative; }
+</style>

@@ -41,6 +41,8 @@ export type TemplateConfig = {
     position?: 'north' | 'south' | 'east' | 'west' | 'northeast' | 'northwest' | 'southeast' | 'southwest' | 'center';
     scale?: number; // 0..100, default ~15
   } | null;
+  /** Subtle decorative border around each image. Applied per-template. */
+  frame?: FrameStyle;
 };
 
 export const defaultConfig: TemplateConfig = {
@@ -150,6 +152,16 @@ export const cinemaConfig: TemplateConfig = {
   kenBurns: false,
 };
 
+export const framedConfig: TemplateConfig = {
+  ...defaultConfig,
+  gap: 32,
+  columns: 2,
+  aspectRatio: 'preserve',
+  showCaptions: true,
+  showExif: false,
+  frame: 'matte',
+};
+
 export const templateDefaults: Record<GalleryTemplateId, TemplateConfig> = {
   grid: gridConfig,
   masonry: masonryConfig,
@@ -161,6 +173,7 @@ export const templateDefaults: Record<GalleryTemplateId, TemplateConfig> = {
   polaroid: polaroidConfig,
   mosaic: mosaicConfig,
   cinema: cinemaConfig,
+  framed: framedConfig,
 };
 
 export const templateMeta: Record<GalleryTemplateId, { name: string; description: string }> = {
@@ -204,6 +217,10 @@ export const templateMeta: Record<GalleryTemplateId, { name: string; description
     name: 'Cinema',
     description: 'Letterboxed 21:9 widescreen, slow fades. Cinematic pace.',
   },
+  framed: {
+    name: 'Framed',
+    description: 'Each photo in a subtle matte or gallery frame. Museum-print feel.',
+  },
 };
 
 export const VALID_TEMPLATES: GalleryTemplateId[] = [
@@ -217,4 +234,5 @@ export const VALID_TEMPLATES: GalleryTemplateId[] = [
   'polaroid',
   'mosaic',
   'cinema',
+  'framed',
 ];
