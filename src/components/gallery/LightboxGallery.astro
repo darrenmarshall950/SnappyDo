@@ -1,0 +1,98 @@
+---
+import type { GalleryImage } from '../../data/galleries';
+import type { TemplateConfig } from '../../lib/gallery-schemas';
+import Lightbox from './Lightbox.astro';
+
+interface Props {
+  images: GalleryImage[];
+  config: TemplateConfig;
+  gallerySlug: string;
+}
+
+const { images, config, gallerySlug } = Astro.props;
+---
+
+<div
+  class="gallery-lightbox-tiles"
+  style={`
+    --gap: ${config.gap}px;
+    --cols: ${config.columns};
+    --bg: ${config.background};
+    --fg: ${config.textColor};
+  `}
+  data-template="lightbox"
+  data-gallery={gallerySlug}
+>
+  {images.map((image, i) => (
+    <button
+      class="gallery-lightbox-tiles__item"
+      type="button"
+      data-image-index={i}
+      aria-label={`Open ${image.alt}`}
+    >
+      <img
+        src={image.thumb}
+        alt={image.alt}
+        loading={i < 8 ? 'eager' : 'lazy'}
+        decoding="async"
+        width={300}
+        height={300}
+      />
+      <span class="gallery-lightbox-tiles__zoom" aria-hidden="true">⤢</span>
+    </button>
+  ))}
+</div>
+
+<Lightbox images={images} config={config} gallerySlug={gallerySlug} />
+
+<style>
+  .gallery-lightbox-tiles {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), 1fr);
+    gap: var(--gap);
+    background: var(--bg);
+    padding: var(--gap);
+    border-radius: 4px;
+  }
+  .gallery-lightbox-tiles__item {
+    all: unset;
+    position: relative;
+    cursor: zoom-in;
+    display: block;
+    overflow: hidden;
+    border-radius: 2px;
+    aspect-ratio: 1 / 1;
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .gallery-lightbox-tiles__item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), filter 0.4s ease;
+    display: block;
+    filter: brightness(0.92);
+  }
+  .gallery-lightbox-tiles__item:hover img,
+  .gallery-lightbox-tiles__item:focus-visible img {
+    transform: scale(1.06);
+    filter: brightness(1);
+  }
+  .gallery-lightbox-tiles__zoom {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: #fafafa;
+    font-size: 1.5rem;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  }
+  .gallery-lightbox-tiles__item:hover .gallery-lightbox-tiles__zoom,
+  .gallery-lightbox-tiles__item:focus-visible .gallery-lightbox-tiles__zoom {
+    opacity: 1;
+  }
+  @media (max-width: 720px) {
+    .gallery-lightbox-tiles { grid-template-columns: repeat(3, 1fr); }
+  }
+</style>

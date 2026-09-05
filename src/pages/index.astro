@@ -1,6 +1,6 @@
 ---
-// SnappyDo landing — placeholder for v0.1
-// Real content + gallery + builder comes in Wave 1 / 2
+// SnappyDo landing — v0.2 gallery template prototype
+import { galleries } from '../data/galleries';
 ---
 <!doctype html>
 <html lang="en">
@@ -12,41 +12,144 @@
   </head>
   <body>
     <main class="hero">
+      <p class="kicker">v0.2 — Gallery template prototype</p>
       <h1>SnappyDo</h1>
       <p class="tagline">Photography websites that breathe. Plus the business tools you'd actually use.</p>
-      <p class="status">v0.1 — container alive, image pipeline next</p>
+      <p class="subtag">3 layouts · live lightbox · EXIF display · swappable per gallery.</p>
+
+      <section class="galleries">
+        <h2>Try the galleries</h2>
+        <ul>
+          {galleries.map((g) => (
+            <li>
+              <a href={`/g/${g.slug}?t=masonry`} class="gallery-card">
+                <div class="gallery-card__preview">
+                  <img src={g.coverImage} alt={g.title} loading="lazy" />
+                </div>
+                <div class="gallery-card__meta">
+                  <span class="gallery-card__title">{g.title}</span>
+                  <span class="gallery-card__count">{g.images.length} photos</span>
+                </div>
+                {g.passwordProtected && <span class="gallery-card__lock">🔒</span>}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
     </main>
     <style>
       :root { color-scheme: dark; }
       body {
         margin: 0;
         font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-        background: #0a0a0a;
+        background: #050505;
         color: #fafafa;
         min-height: 100vh;
-        display: grid;
-        place-items: center;
       }
-      .hero { text-align: center; padding: 4rem 2rem; max-width: 720px; }
-      h1 {
-        font-size: clamp(3rem, 8vw, 6rem);
-        font-weight: 800;
-        letter-spacing: -0.04em;
+      .hero {
+        text-align: left;
+        padding: 5rem 2rem 6rem;
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+      .kicker {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.75rem;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
         margin: 0 0 1rem;
-        background: linear-gradient(135deg, #fafafa 0%, #888 100%);
+      }
+      h1 {
+        font-size: clamp(3.5rem, 10vw, 7rem);
+        font-weight: 800;
+        letter-spacing: -0.045em;
+        margin: 0 0 1.5rem;
+        background: linear-gradient(135deg, #fafafa 0%, #6b6b6b 100%);
         -webkit-background-clip: text;
         background-clip: text;
         -webkit-text-fill-color: transparent;
+        line-height: 0.95;
       }
-      .tagline { font-size: 1.25rem; color: #b4b4b4; margin: 0 0 2rem; line-height: 1.5; }
-      .status {
-        display: inline-block;
-        padding: 0.5rem 1rem;
-        border: 1px solid #2a2a2a;
-        border-radius: 999px;
-        font-size: 0.875rem;
+      .tagline {
+        font-size: 1.5rem;
+        color: #d4d4d4;
+        margin: 0 0 0.5rem;
+        max-width: 720px;
+        line-height: 1.4;
+      }
+      .subtag {
+        font-size: 1rem;
         color: #888;
+        margin: 0 0 4rem;
+      }
+      .galleries h2 {
+        font-size: 0.875rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: #888;
+        font-weight: 500;
+        margin: 0 0 1.5rem;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .galleries ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 1.25rem;
+      }
+      .gallery-card {
+        display: block;
+        position: relative;
+        background: #0a0a0a;
+        border: 1px solid #1a1a1a;
+        border-radius: 8px;
+        overflow: hidden;
+        text-decoration: none;
+        color: inherit;
+        transition: border-color 0.2s ease, transform 0.3s ease;
+      }
+      .gallery-card:hover {
+        border-color: #333;
+        transform: translateY(-2px);
+      }
+      .gallery-card__preview {
+        aspect-ratio: 16 / 10;
+        overflow: hidden;
+        background: #111;
+      }
+      .gallery-card__preview img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .gallery-card:hover .gallery-card__preview img {
+        transform: scale(1.04);
+      }
+      .gallery-card__meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.25rem;
+      }
+      .gallery-card__title { font-weight: 600; }
+      .gallery-card__count {
+        color: #888;
+        font-size: 0.8125rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .gallery-card__lock {
+        position: absolute;
+        top: 0.75rem;
+        right: 0.75rem;
+        background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(8px);
+        border-radius: 6px;
+        padding: 0.25rem 0.5rem;
+        font-size: 0.875rem;
       }
     </style>
   </body>

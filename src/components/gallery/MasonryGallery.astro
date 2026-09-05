@@ -1,0 +1,105 @@
+---
+import type { GalleryImage } from '../../data/galleries';
+import type { TemplateConfig } from '../../lib/gallery-schemas';
+import Lightbox from './Lightbox.astro';
+
+interface Props {
+  images: GalleryImage[];
+  config: TemplateConfig;
+  gallerySlug: string;
+}
+
+const { images, config, gallerySlug } = Astro.props;
+---
+
+<div
+  class="gallery-masonry"
+  style={`
+    --gap: ${config.gap}px;
+    --cols: ${config.columns};
+    --bg: ${config.background};
+    --fg: ${config.textColor};
+  `}
+  data-template="masonry"
+  data-gallery={gallerySlug}
+>
+  {images.map((image, i) => (
+    <figure class="gallery-masonry__item" data-image-index={i}>
+      <button class="gallery-masonry__thumb" type="button" aria-label={`Open ${image.alt}`}>
+        <img
+          src={image.thumb}
+          alt={image.alt}
+          loading={i < 4 ? 'eager' : 'lazy'}
+          decoding="async"
+          width={600}
+          height={Math.round((600 * image.height) / image.width)}
+        />
+      </button>
+      {config.showCaptions && (
+        <figcaption class="gallery-masonry__caption">
+          <span class="gallery-masonry__alt">{image.alt}</span>
+          <span class="gallery-masonry__exif">
+            {image.exif.camera} · {image.exif.focalLength} · {image.exif.aperture} · 1/{image.exif.shutter.replace('1/', '')}s · ISO {image.exif.iso}
+          </span>
+        </figcaption>
+      )}
+    </figure>
+  ))}
+</div>
+
+<Lightbox images={images} config={config} gallerySlug={gallerySlug} />
+
+<style>
+  .gallery-masonry {
+    column-count: var(--cols);
+    column-gap: var(--gap);
+    background: var(--bg);
+    color: var(--fg);
+    padding: var(--gap);
+    border-radius: 4px;
+  }
+  .gallery-masonry__item {
+    break-inside: avoid;
+    margin: 0 0 var(--gap) 0;
+    display: block;
+  }
+  .gallery-masonry__thumb {
+    all: unset;
+    cursor: zoom-in;
+    display: block;
+    overflow: hidden;
+    border-radius: 2px;
+    width: 100%;
+  }
+  .gallery-masonry__thumb img {
+    width: 100%;
+    height: auto;
+    display: block;
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .gallery-masonry__thumb:hover img,
+  .gallery-masonry__thumb:focus-visible img {
+    transform: scale(1.03);
+  }
+  .gallery-masonry__caption {
+    margin-top: 0.5rem;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    color: var(--fg);
+    opacity: 0.7;
+  }
+  .gallery-masonry__alt {
+    display: block;
+    font-weight: 500;
+  }
+  .gallery-masonry__exif {
+    display: block;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    opacity: 0.7;
+    margin-top: 0.125rem;
+  }
+  @media (max-width: 720px) {
+    .gallery-masonry { column-count: 2; }
+  }
+</style>

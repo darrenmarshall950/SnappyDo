@@ -1,0 +1,84 @@
+---
+import type { GalleryImage } from '../../data/galleries';
+import type { TemplateConfig } from '../../lib/gallery-schemas';
+import Lightbox from './Lightbox.astro';
+
+interface Props {
+  images: GalleryImage[];
+  config: TemplateConfig;
+  gallerySlug: string;
+}
+
+const { images, config, gallerySlug } = Astro.props;
+---
+
+<div
+  class="gallery-grid"
+  style={`
+    --gap: ${config.gap}px;
+    --cols: ${config.columns};
+    --bg: ${config.background};
+    --fg: ${config.textColor};
+  `}
+  data-template="grid"
+  data-gallery={gallerySlug}
+>
+  {images.map((image, i) => (
+    <button
+      class="gallery-grid__item"
+      type="button"
+      data-image-index={i}
+      aria-label={`Open ${image.alt}`}
+    >
+      <img
+        src={image.thumb}
+        alt={image.alt}
+        loading={i < 6 ? 'eager' : 'lazy'}
+        decoding="async"
+        width={600}
+        height={Math.round((600 * image.height) / image.width)}
+      />
+    </button>
+  ))}
+</div>
+
+<Lightbox images={images} config={config} gallerySlug={gallerySlug} />
+
+<style>
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), 1fr);
+    gap: var(--gap);
+    background: var(--bg);
+    color: var(--fg);
+    padding: var(--gap);
+    border-radius: 4px;
+  }
+  .gallery-grid__item {
+    all: unset;
+    cursor: zoom-in;
+    display: block;
+    overflow: hidden;
+    border-radius: 2px;
+    aspect-ratio: 4 / 3;
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .gallery-grid__item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    display: block;
+  }
+  .gallery-grid__item:hover img,
+  .gallery-grid__item:focus-visible img {
+    transform: scale(1.04);
+  }
+  .gallery-grid__item:focus-visible {
+    outline: 2px solid #fafafa;
+    outline-offset: 2px;
+  }
+  @media (max-width: 720px) {
+    .gallery-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
