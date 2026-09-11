@@ -2,17 +2,20 @@
 /**
  * ContactSheetGallery — vintage 35mm negative contact sheet.
  *
- * Visual brief (revised):
+ * Visual brief:
  *   - Real negative strips from a film processor: one frame WIDE per strip,
  *     frames stacked vertically, sprocket holes along BOTH vertical edges.
  *   - Multiple strips laid side-by-side across the page (3–5 columns of strips).
  *   - Warm off-white light box background (photographer's light table).
  *   - Each strip looks like a piece of 35mm film — black base, sprocket holes.
+ *   - Sprocket holes calculated by a fixed PITCH so they're consistent across
+ *     strips of different lengths (mimics real 35mm sprocket spacing).
+ *   - Sprockets slightly OFFSET between left and right edges (real film has
+ *     this — registration index for the film advance mechanism).
  *   - Frame numbers running down the side ("01A", "02A", "03A"…).
  *   - Hover: frame brightens; click → existing lightbox.
  *
  * Schema: `columns` controls number of strips across the page (3–5).
- * Frames are distributed in column-major order (strip 1 fills first, then strip 2…).
  */
 import type { AdaptedImage } from '../../lib/image-adapter';
 import type { TemplateConfig } from '../../lib/gallery-schemas';
@@ -27,18 +30,25 @@ interface Props {
 
 const { images, config, gallerySlug, galleryTitle } = Astro.props;
 
-// Number of strips across the page (3–5)
 const stripsAcross = Math.min(5, Math.max(3, config.columns >= 3 && config.columns <= 5 ? config.columns : 4));
 
-// Edge text: configurable, defaults to a stock name
 const edgeText = (config.watermark?.text && config.watermark.text.length > 0)
   ? config.watermark.text
   : 'KODAK PORTRA 400';
 const year = new Date().getFullYear();
 const edgeRunText = `${edgeText} • 35MM • 36 EXP • ${year}`;
 
-// Distribute images into strips column-major: strip[0] gets images[0, stripsAcross, 2*stripsAcross, ...]
-// Simpler & equally nice: distribute round-robin (strip 1 gets img 0, strip 2 gets img 1, ...)
+// Real 35mm film has approximately 4 sprocket perforations per cm of film
+// length, regardless of frame content. We use a fixed pitch (FRAME_PITCH_PX) so
+// strip sprockets stay consistent across galleries with different frame counts.
+const SPROCKET_PITCH_PX = 56;
+// Number of sprockets per edge — based on the number of frames + a couple extras
+// to feel real (real film typically has 8 sprockets per frame position).
+function sprocketCount(frames: number) {
+  return Math.max(8, Math.min(28, frames * 2 + 2));
+}
+
+// Distribute images into strips round-robin
 const strips: AdaptedImage[][] = Array.from({ length: stripsAcross }, () => []);
 images.forEach((img, i) => {
   strips[i % stripsAcross].push(img);
@@ -49,11 +59,15 @@ images.forEach((img, i) => {
   class="cs"
   data-template="contact-sheet"
   data-gallery={gallerySlug}
-  style={`--bg:${config.background};--fg:${config.textColor};--strips:${stripsAcross};`}
+  style={`--bg:${config.background};--fg:${config.textColor};--strips:${stripsAcross};--sprocket-pitch:${SPROCKET_PITCH_PX}px;`}
 >
   <div class="cs__table" role="list">
     {strips.map((strip, stripIdx) => {
       const rollNumber = String(stripIdx + 1).padStart(2, '0');
+      const leftSprockets = sprocketCount(strip.length);
+      const rightSprockets = sprocketCount(strip.length);
+      // Offset right edge by half a pitch — mirrors real film registration
+      const rightOffsetPx = -Math.round(SPROCKET_PITCH_PX / 2);
       return (
         <article class="cs__strip" role="listitem" aria-label={`Strip ${rollNumber}`}>
           {/* Top cap */}
@@ -63,7 +77,9 @@ images.forEach((img, i) => {
           <div class="cs__film">
             {/* Vertical sprocket holes — left edge */}
             <span class="cs__sprocket-col cs__sprocket-col--left" aria-hidden="true">
-              {strip.map((_, i) => <span class="cs__hole" style={`--i:${i}`}></span>)}
+              {Array.from({ length: leftSprockets }).map((_, i) => (
+                <span class="cs__hole" style={`--i:${i};--offset:0px;`}></span>
+              ))}
             </span>
 
             {/* Vertical edge text running DOWN the LEFT edge */}
@@ -72,7 +88,6 @@ images.forEach((img, i) => {
             {/* Stacked frames — single column */}
             <div class="cs__frames">
               {strip.map((img, frameIdx) => {
-                // Absolute index in original image array
                 const absIdx = (frameIdx * stripsAcross) + stripIdx;
                 const frameLabel = `${String(absIdx + 1).padStart(2, '0')}A`;
                 return (
@@ -93,9 +108,11 @@ images.forEach((img, i) => {
               })}
             </div>
 
-            {/* Vertical sprocket holes — right edge */}
-            <span class="cs__sprocket-col cs__sprocket-col--right" aria-hidden="true">
-              {strip.map((_, i) => <span class="cs__hole" style={`--i:${i}`}></span>)}
+            {/* Vertical sprocket holes — right edge (offset by half-pitch) */}
+            <span class="cs__sprocket-col cs__sprocket-col--right" aria-hidden="true" style={`--side-offset:${rightOffsetPx}px;`}>
+              {Array.from({ length: rightSprockets }).map((_, i) => (
+                <span class="cs__hole" style={`--i:${i};--offset:${rightOffsetPx}px;`}></span>
+              ))}
             </span>
           </div>
 
@@ -153,7 +170,7 @@ images.forEach((img, i) => {
     overflow: hidden;
   }
 
-  /* Top + bottom rounded caps of the film strip (where you'd tape it) */
+  /* Top + bottom rounded caps of the film strip */
   .cs__cap {
     height: 6px;
     background: linear-gradient(180deg, var(--film-shadow), var(--film-base));
@@ -162,37 +179,55 @@ images.forEach((img, i) => {
   /* The body: holds frames + sprockets + edge text */
   .cs__film {
     position: relative;
-    padding: clamp(0.75rem, 1.5vw, 1.25rem) clamp(1.5rem, 2vw, 2rem);
+    padding: clamp(1rem, 1.8vw, 1.5rem) clamp(1.5rem, 2vw, 2rem);
     background:
       linear-gradient(180deg, rgba(255,255,255,0.02) 0%, transparent 50%, rgba(0,0,0,0.4) 100%),
       var(--film-base);
   }
 
-  /* Vertical sprocket columns along left and right edges */
+  /* Vertical sprocket columns along left and right edges
+   * Real 35mm sprockets are rectangular (tall:wide ≈ 2:1) with sharp corners.
+   * Spacing is consistent (a fixed pitch per strip) and the right edge is
+   * offset by half a pitch from the left, mimicking real film registration. */
   .cs__sprocket-col {
     position: absolute;
-    top: clamp(0.75rem, 1.5vw, 1.25rem);
-    bottom: clamp(0.75rem, 1.5vw, 1.25rem);
+    top: clamp(1rem, 1.8vw, 1.5rem);
+    bottom: clamp(1rem, 1.8vw, 1.5rem);
     display: flex;
     flex-direction: column;
-    justify-content: space-around;
-    padding: 4px 0;
+    justify-content: space-between;
+    padding: 2px 0;
     pointer-events: none;
+    gap: var(--sprocket-pitch);
   }
   .cs__sprocket-col--left { left: 4px; }
   .cs__sprocket-col--right { right: 4px; }
+
+  /* One sprocket perforation — sharp rectangular hole punched through the film.
+   * Aspect ratio mimics real 35mm perforations (~2.5:1 wide:tall… wait,
+   * perforations are wider than tall in real 35mm — actually they're ~2mm
+   * wide × ~1mm tall, so wider than tall. We render 14×7px with sharp
+   * corners and a faint inner edge for depth. */
   .cs__hole {
-    width: 8px;
-    height: 10px;
+    width: 14px;
+    height: 7px;
     background: var(--hole-color);
     border-radius: 1px;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3) inset;
+    flex-shrink: 0;
+    box-shadow:
+      /* Outer dim halo (the film thins around the perforation) */
+      0 0 0 1px rgba(0, 0, 0, 0.4),
+      /* Inner dark edge (the perforation's bevel) */
+      inset 0 1px 0 rgba(0, 0, 0, 0.5),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+      /* Subtle light reflection on top edge */
+      inset 0 -2px 1px rgba(255, 255, 255, 0.15);
   }
 
-  /* Vertical edge text — left side */
+  /* Vertical edge text — left side, between sprocket column and frames */
   .cs__edge-text {
     position: absolute;
-    left: 18px;
+    left: 22px;
     top: 50%;
     transform: translateY(-50%) rotate(-90deg);
     transform-origin: left center;
@@ -277,12 +312,13 @@ images.forEach((img, i) => {
     color: rgba(20, 18, 14, 0.6);
   }
 
-  /* Responsive: fewer strips on smaller screens */
+  /* Responsive */
   @media (max-width: 1100px) {
     .cs__table { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
   @media (max-width: 800px) {
     .cs__table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cs__hole { width: 12px; height: 6px; }
   }
   @media (max-width: 540px) {
     .cs__table { grid-template-columns: 1fr; max-width: 360px; }
