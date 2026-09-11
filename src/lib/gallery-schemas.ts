@@ -161,7 +161,7 @@ export const framedConfig: TemplateConfig = {
 export const contactSheetConfig: TemplateConfig = {
   ...defaultConfig,
   gap: 0,
-  columns: 5,
+  columns: 4,
   aspectRatio: 'landscape',
   showCaptions: false,
   showExif: false,

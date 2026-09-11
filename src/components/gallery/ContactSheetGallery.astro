@@ -1,21 +1,18 @@
 ---
 /**
- * ContactSheetGallery — vintage 35mm contact print.
+ * ContactSheetGallery — vintage 35mm negative contact sheet.
  *
- * Visual brief:
- *   - Warm off-white "light box" background like a photographer's light table
- *   - Multiple horizontal film strips stacked top-to-bottom
- *   - Each strip: black film base, sprocket holes top + bottom (35mm style)
- *   - Edge text running down left side of each strip (rotated -90°)
- *   - Frame numbers above each photo (01A, 02A, etc.)
- *   - Hover: photo brightens, frame number outline highlights
- *   - Click → existing Lightbox overlay
+ * Visual brief (revised):
+ *   - Real negative strips from a film processor: one frame WIDE per strip,
+ *     frames stacked vertically, sprocket holes along BOTH vertical edges.
+ *   - Multiple strips laid side-by-side across the page (3–5 columns of strips).
+ *   - Warm off-white light box background (photographer's light table).
+ *   - Each strip looks like a piece of 35mm film — black base, sprocket holes.
+ *   - Frame numbers running down the side ("01A", "02A", "03A"…).
+ *   - Hover: frame brightens; click → existing lightbox.
  *
- * Slice pattern: groups of `framesPerStrip` images (default 5) form one roll.
- * Edge text is configurable per-template; defaults to "KODAK PORTRA 400".
- *
- * Sister component to MosaicGallery / CinemaGallery — same data shape, same
- * lightbox trigger (`data-lightbox-trigger`, `data-image-id`).
+ * Schema: `columns` controls number of strips across the page (3–5).
+ * Frames are distributed in column-major order (strip 1 fills first, then strip 2…).
  */
 import type { AdaptedImage } from '../../lib/image-adapter';
 import type { TemplateConfig } from '../../lib/gallery-schemas';
@@ -30,59 +27,63 @@ interface Props {
 
 const { images, config, gallerySlug, galleryTitle } = Astro.props;
 
-const framesPerStrip = (config.columns && config.columns >= 4 && config.columns <= 7)
-  ? config.columns
-  : 5; // classic 35mm contact sheet is 5 or 6 across — 5 is the safe default
-const sprocketHoleCount = Math.max(8, framesPerStrip * 2); // 2 per frame minimum
+// Number of strips across the page (3–5)
+const stripsAcross = Math.min(5, Math.max(3, config.columns >= 3 && config.columns <= 5 ? config.columns : 4));
+
+// Edge text: configurable, defaults to a stock name
 const edgeText = (config.watermark?.text && config.watermark.text.length > 0)
   ? config.watermark.text
   : 'KODAK PORTRA 400';
 const year = new Date().getFullYear();
-const rollText = `${edgeText} • ${gallerySlug.toUpperCase()} • 135 • 36 EXP • ${year}`;
+const edgeRunText = `${edgeText} • 35MM • 36 EXP • ${year}`;
 
-// Slice images into rows of framesPerStrip. Final row may be short.
-const strips: AdaptedImage[][] = [];
-for (let i = 0; i < images.length; i += framesPerStrip) {
-  strips.push(images.slice(i, i + framesPerStrip));
-}
+// Distribute images into strips column-major: strip[0] gets images[0, stripsAcross, 2*stripsAcross, ...]
+// Simpler & equally nice: distribute round-robin (strip 1 gets img 0, strip 2 gets img 1, ...)
+const strips: AdaptedImage[][] = Array.from({ length: stripsAcross }, () => []);
+images.forEach((img, i) => {
+  strips[i % stripsAcross].push(img);
+});
 ---
 
 <div
   class="cs"
   data-template="contact-sheet"
   data-gallery={gallerySlug}
-  style={`--bg:${config.background};--fg:${config.textColor};`}
+  style={`--bg:${config.background};--fg:${config.textColor};--strips:${stripsAcross};`}
 >
   <div class="cs__table" role="list">
     {strips.map((strip, stripIdx) => {
       const rollNumber = String(stripIdx + 1).padStart(2, '0');
       return (
-        <article class="cs__strip" role="listitem" aria-label={`Roll ${rollNumber}`}>
-          {/* Top sprocket holes row */}
-          <div class="cs__sprockets" aria-hidden="true">
-            {Array.from({ length: sprocketHoleCount }).map((_, i) => (
-              <span class="cs__hole" style={`--i:${i}`}></span>
-            ))}
-          </div>
+        <article class="cs__strip" role="listitem" aria-label={`Strip ${rollNumber}`}>
+          {/* Top cap */}
+          <div class="cs__cap" aria-hidden="true"></div>
 
-          {/* Film body with frames + edge text */}
+          {/* Film body with sprocket rows + stacked frames */}
           <div class="cs__film">
-            {/* Vertical edge text running DOWN the left edge */}
-            <span class="cs__edge-text" aria-hidden="true">{rollText}</span>
+            {/* Vertical sprocket holes — left edge */}
+            <span class="cs__sprocket-col cs__sprocket-col--left" aria-hidden="true">
+              {strip.map((_, i) => <span class="cs__hole" style={`--i:${i}`}></span>)}
+            </span>
 
-            <div class="cs__frames" style={`--frames:${framesPerStrip};`}>
+            {/* Vertical edge text running DOWN the LEFT edge */}
+            <span class="cs__edge-text" aria-hidden="true">{edgeRunText}</span>
+
+            {/* Stacked frames — single column */}
+            <div class="cs__frames">
               {strip.map((img, frameIdx) => {
-                const absIdx = stripIdx * framesPerStrip + frameIdx;
-                const frameLabel = `${String(stripIdx + 1).padStart(2, '0')}${String.fromCharCode(65 + frameIdx)}`;
+                // Absolute index in original image array
+                const absIdx = (frameIdx * stripsAcross) + stripIdx;
+                const frameLabel = `${String(absIdx + 1).padStart(2, '0')}A`;
                 return (
-                  <figure class="cs__frame" data-lightbox-trigger data-image-id={img.id}>
+                  <figure class="cs__frame" data-lightbox-trigger data-image-id={img.id} aria-label={`Frame ${frameLabel}`}>
                     <span class="cs__frame-num" aria-hidden="true">{frameLabel}</span>
                     <img
                       src={img.thumb}
                       srcset={img.srcset}
-                      sizes={`(max-width: 720px) ${Math.round(100 / Math.max(3, framesPerStrip))}vw, ${Math.round(100 / framesPerStrip)}vw`}
+                      sizes={`(max-width: 720px) 50vw, ${Math.round(100 / stripsAcross)}vw`}
                       alt={img.alt}
-                      loading={absIdx < 5 ? 'eager' : 'lazy'}
+                      loading={absIdx < 4 ? 'eager' : 'lazy'}
                       decoding="async"
                       width={img.width}
                       height={img.height}
@@ -91,17 +92,18 @@ for (let i = 0; i < images.length; i += framesPerStrip) {
                 );
               })}
             </div>
+
+            {/* Vertical sprocket holes — right edge */}
+            <span class="cs__sprocket-col cs__sprocket-col--right" aria-hidden="true">
+              {strip.map((_, i) => <span class="cs__hole" style={`--i:${i}`}></span>)}
+            </span>
           </div>
 
-          {/* Bottom sprocket holes row */}
-          <div class="cs__sprockets" aria-hidden="true">
-            {Array.from({ length: sprocketHoleCount }).map((_, i) => (
-              <span class="cs__hole" style={`--i:${i}`}></span>
-            ))}
-          </div>
+          {/* Bottom cap */}
+          <div class="cs__cap" aria-hidden="true"></div>
 
-          {/* Roll label below strip */}
-          <p class="cs__roll-label" aria-hidden="true">— Roll {rollNumber} of {strips.length} —</p>
+          {/* Strip label below */}
+          <p class="cs__strip-label" aria-hidden="true">— {String.fromCharCode(65 + stripIdx)} —</p>
         </article>
       );
     })}
@@ -116,75 +118,87 @@ for (let i = 0; i < images.length; i += framesPerStrip) {
 
 <style>
   .cs {
-    --lightbox-bg: #ece5d4; /* warm light-table cream */
+    --lightbox-bg: #ece5d4;
     --film-base: #0e0e0e;
-    --film-shadow: #1a1a1a;
-    --hole-color: var(--lightbox-bg);
+    --film-shadow: #1c1c1c;
+    --hole-color: #f5efe0;
     --edge-text-color: rgba(245, 230, 200, 0.55);
     background:
       radial-gradient(circle at 50% 0%, #f8f2e2 0%, var(--lightbox-bg) 60%, #d8cfba 100%);
     color: var(--fg);
-    padding: clamp(2rem, 5vw, 5rem) clamp(0.5rem, 2vw, 2rem);
+    padding: clamp(2rem, 5vw, 4rem) clamp(0.5rem, 2vw, 2rem);
     min-height: 60vh;
   }
 
+  /* Strips side-by-side */
   .cs__table {
-    max-width: 1400px;
+    max-width: 1600px;
     margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: clamp(2rem, 4vw, 3.5rem);
+    display: grid;
+    grid-template-columns: repeat(var(--strips), minmax(0, 1fr));
+    gap: clamp(1rem, 2vw, 2rem);
+    align-items: start;
   }
 
+  /* Each strip is its own column */
   .cs__strip {
     display: flex;
     flex-direction: column;
-    background: linear-gradient(180deg, var(--film-shadow) 0%, var(--film-base) 8%, var(--film-base) 92%, var(--film-shadow) 100%);
+    background: linear-gradient(180deg, var(--film-shadow) 0%, var(--film-base) 4%, var(--film-base) 96%, var(--film-shadow) 100%);
     border-radius: 2px;
     box-shadow:
       0 1px 0 rgba(255, 255, 255, 0.04) inset,
       0 24px 60px -20px rgba(0, 0, 0, 0.45),
       0 6px 18px -8px rgba(0, 0, 0, 0.35);
-    position: relative;
     overflow: hidden;
   }
 
-  /* Sprocket rows (top + bottom) — mirror layout */
-  .cs__sprockets {
-    height: 14px;
-    background: var(--film-base);
-    display: flex;
-    align-items: center;
-    justify-content: space-around;
-    padding: 0 8px;
-  }
-  .cs__hole {
-    width: 10px;
-    height: 8px;
-    background: var(--hole-color);
-    border-radius: 1px;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3) inset;
+  /* Top + bottom rounded caps of the film strip (where you'd tape it) */
+  .cs__cap {
+    height: 6px;
+    background: linear-gradient(180deg, var(--film-shadow), var(--film-base));
   }
 
-  /* The dark film body holding frames + edge text */
+  /* The body: holds frames + sprockets + edge text */
   .cs__film {
     position: relative;
-    padding: clamp(1.25rem, 2.5vw, 2rem) clamp(1.5rem, 3vw, 2.25rem);
+    padding: clamp(0.75rem, 1.5vw, 1.25rem) clamp(1.5rem, 2vw, 2rem);
     background:
       linear-gradient(180deg, rgba(255,255,255,0.02) 0%, transparent 50%, rgba(0,0,0,0.4) 100%),
       var(--film-base);
   }
 
-  /* Vertical edge text on the LEFT edge */
+  /* Vertical sprocket columns along left and right edges */
+  .cs__sprocket-col {
+    position: absolute;
+    top: clamp(0.75rem, 1.5vw, 1.25rem);
+    bottom: clamp(0.75rem, 1.5vw, 1.25rem);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    padding: 4px 0;
+    pointer-events: none;
+  }
+  .cs__sprocket-col--left { left: 4px; }
+  .cs__sprocket-col--right { right: 4px; }
+  .cs__hole {
+    width: 8px;
+    height: 10px;
+    background: var(--hole-color);
+    border-radius: 1px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3) inset;
+  }
+
+  /* Vertical edge text — left side */
   .cs__edge-text {
     position: absolute;
-    left: 4px;
+    left: 18px;
     top: 50%;
     transform: translateY(-50%) rotate(-90deg);
     transform-origin: left center;
     white-space: nowrap;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.625rem;
+    font-size: 0.5625rem;
     letter-spacing: 0.32em;
     color: var(--edge-text-color);
     text-transform: uppercase;
@@ -192,13 +206,14 @@ for (let i = 0; i < images.length; i += framesPerStrip) {
     pointer-events: none;
   }
 
-  /* Frames grid */
+  /* Stacked frames — single column */
   .cs__frames {
-    display: grid;
-    grid-template-columns: repeat(var(--frames), minmax(0, 1fr));
-    gap: clamp(4px, 0.8vw, 8px);
+    display: flex;
+    flex-direction: column;
+    gap: clamp(6px, 1vw, 10px);
   }
 
+  /* Each frame: 3:2 landscape (classic 35mm) */
   .cs__frame {
     position: relative;
     margin: 0;
@@ -233,17 +248,17 @@ for (let i = 0; i < images.length; i += framesPerStrip) {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.5625rem;
     letter-spacing: 0.08em;
-    color: rgba(245, 230, 200, 0.55);
-    background: rgba(0, 0, 0, 0.35);
+    color: rgba(245, 230, 200, 0.6);
+    background: rgba(0, 0, 0, 0.4);
     padding: 1px 4px;
     border-radius: 1px;
     pointer-events: none;
   }
 
-  .cs__roll-label {
+  .cs__strip-label {
     text-align: center;
     margin: 0;
-    padding: 6px 0 4px;
+    padding: 5px 0 4px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.6875rem;
     letter-spacing: 0.18em;
@@ -254,7 +269,7 @@ for (let i = 0; i < images.length; i += framesPerStrip) {
 
   .cs__caption {
     text-align: center;
-    margin-top: 2.5rem;
+    margin-top: 2rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.75rem;
     letter-spacing: 0.16em;
@@ -262,12 +277,15 @@ for (let i = 0; i < images.length; i += framesPerStrip) {
     color: rgba(20, 18, 14, 0.6);
   }
 
-  /* Responsive: drop to 4 frames per row on tablet, 3 on phone */
-  @media (max-width: 900px) {
-    .cs__frames { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+  /* Responsive: fewer strips on smaller screens */
+  @media (max-width: 1100px) {
+    .cs__table { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
-  @media (max-width: 600px) {
-    .cs__frames { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
-    .cs__edge-text { font-size: 0.5625rem; letter-spacing: 0.24em; }
+  @media (max-width: 800px) {
+    .cs__table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 540px) {
+    .cs__table { grid-template-columns: 1fr; max-width: 360px; }
+    .cs__strip { margin: 0 auto; max-width: 320px; }
   }
 </style>
