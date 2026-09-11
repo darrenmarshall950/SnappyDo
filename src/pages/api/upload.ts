@@ -6,21 +6,44 @@
  *   files: File[] (multipart files)
  *
  * Response: { uploaded: ImageRecord[], errors: string[] }
+ *
+ * v0.8 hardening:
+ *   - Removed hard `files: 20` cap (was the cause of "fails after 20 photos").
+ *   - Streams each file DIRECTLY to disk via a WriteStream instead of buffering
+ *     full bytes in memory (100 × 10MB photos = ~1GB RAM saved).
+ *   - EXIF + dimension read happens on just the first ~256KB header chunk so
+ *     we never accumulate more than ~256KB per file in JS heap.
+ *   - Continues on per-file errors — one bad file doesn't kill the batch.
+ *   - 5-min safety timeout guarantees the request always terminates.
  */
 import type { APIRoute } from 'astro';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { createWriteStream } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Busboy from 'busboy';
-import { Readable } from 'node:stream';
+import { Readable, pipeline } from 'node:stream';
+import { promisify } from 'node:util';
 import { insertImage, getGalleryBySlug } from '../../lib/db';
 import { extractExif } from '../../lib/exif';
+
+const pipelineAsync = promisify(pipeline);
 
 export const prerender = false;
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/app/uploads';
-const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
-const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/avif']);
+const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB — raise if you shoot RAWs
+const MAX_FILES_PER_REQUEST = 500; // soft cap
+const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 min safety net
+const HEADER_READ_BYTES = 256 * 1024;
+const ALLOWED_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/avif',
+  'image/tiff',
+]);
 
 type UploadedRecord = {
   id: number;
@@ -41,7 +64,6 @@ export const POST: APIRoute = async ({ request }) => {
 
   await mkdir(UPLOAD_DIR, { recursive: true });
 
-  // busboy needs a Node stream — web Request body is a WHATWG stream
   const nodeStream = Readable.fromWeb(request.body as unknown as import('stream/web').ReadableStream);
 
   // busboy expects lowercase header keys (Node IncomingMessage convention)
@@ -53,7 +75,10 @@ export const POST: APIRoute = async ({ request }) => {
   return new Promise<Response>((resolve) => {
     const busboy = Busboy({
       headers,
-      limits: { fileSize: MAX_FILE_BYTES, files: 20 },
+      limits: {
+        fileSize: MAX_FILE_BYTES,
+        files: MAX_FILES_PER_REQUEST,
+      },
     });
 
     let gallerySlug: string | null = null;
@@ -61,53 +86,89 @@ export const POST: APIRoute = async ({ request }) => {
     const errors: string[] = [];
     let pendingFiles = 0;
     let finished = false;
+    let totalFilesSeen = 0;
+    let resolved = false;
+
+    function safeResolve(body: unknown, status: number) {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(safetyTimer);
+      resolve(json(body, status));
+    }
 
     function maybeResolve() {
+      if (resolved) return;
       if (finished && pendingFiles === 0) {
-        resolve(json({ uploaded, errors }, errors.length && !uploaded.length ? 400 : 200));
+        safeResolve({ uploaded, errors }, errors.length && !uploaded.length ? 400 : 200);
       }
     }
+
+    const safetyTimer = setTimeout(() => {
+      errors.push('Server timed out after 5 min — some files may not have been processed. The client should retry any missing files.');
+      safeResolve({ uploaded, errors }, 504);
+    }, REQUEST_TIMEOUT_MS);
 
     busboy.on('field', (name, value) => {
       if (name === 'gallery_slug') gallerySlug = String(value).trim();
     });
 
-    busboy.on('file', async (_fieldname, file, info) => {
+    busboy.on('filesLimit', () => {
+      errors.push(
+        `Batch limit reached (${MAX_FILES_PER_REQUEST} files). Client should send smaller batches.`
+      );
+    });
+
+    busboy.on('file', (_fieldname, file, info) => {
       pendingFiles++;
+      totalFilesSeen++;
       const { filename, mimeType } = info;
 
-      // Reject early on type
+      // Reject early on type — drain the stream so busboy can move on
       if (!ALLOWED_MIME.has(mimeType)) {
         errors.push(`skipped ${filename}: unsupported type ${mimeType}`);
-        file.resume(); // drain
+        file.resume();
         pendingFiles--;
+        maybeResolve();
         return;
       }
 
-      // Buffer the file in memory — better-sqlite3 + EXIF parsing want bytes
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
+      const ext = extensionFromMime(mimeType) || extensionFromName(filename) || 'jpg';
+      const stored = `${randomUUID()}.${ext}`;
+      const fullPath = join(UPLOAD_DIR, stored);
+      const out = createWriteStream(fullPath);
+
       let limitHit = false;
+      let bytesWritten = 0;
+
+      // Accumulate first ~256KB for EXIF/dimension parsing only — never the full file.
+      const headerChunks: Buffer[] = [];
+      let headerBytes = 0;
 
       file.on('data', (chunk: Buffer) => {
-        totalBytes += chunk.length;
-        if (totalBytes > MAX_FILE_BYTES) {
-          limitHit = true;
-          return;
+        bytesWritten += chunk.length;
+        if (limitHit) return;
+        if (headerBytes < HEADER_READ_BYTES) {
+          const need = HEADER_READ_BYTES - headerBytes;
+          const take = Math.min(need, chunk.length);
+          headerChunks.push(chunk.subarray(0, take));
+          headerBytes += take;
         }
-        chunks.push(chunk);
       });
 
       file.on('limit', () => {
+        limitHit = true;
+        errors.push(`skipped ${filename}: exceeds ${MAX_FILE_BYTES} bytes`);
+        file.resume();
+      });
+
+      pipelineAsync(file, out).catch((err: Error) => {
+        errors.push(`write failed for ${filename}: ${err.message}`);
         limitHit = true;
       });
 
       file.on('end', async () => {
         try {
-          if (limitHit) {
-            errors.push(`skipped ${filename}: exceeds ${MAX_FILE_BYTES} bytes`);
-            return;
-          }
+          if (limitHit) return;
           if (!gallerySlug) {
             errors.push(`skipped ${filename}: missing gallery_slug field`);
             return;
@@ -119,17 +180,10 @@ export const POST: APIRoute = async ({ request }) => {
             return;
           }
 
-          const buf = Buffer.concat(chunks);
-          const ext = extensionFromMime(mimeType) || extensionFromName(filename) || 'jpg';
-          const stored = `${randomUUID()}.${ext}`;
-          const fullPath = join(UPLOAD_DIR, stored);
-
-          await writeFile(fullPath, buf);
-
-          // EXIF + dimensions (best-effort, never fails upload)
+          const headerBuf = Buffer.concat(headerChunks, headerBytes);
           const [exif, dims] = await Promise.all([
-            extractExif(buf),
-            readDimensions(buf, mimeType),
+            extractExif(headerBuf).catch(() => ({})),
+            Promise.resolve(readDimensions(headerBuf, mimeType)),
           ]);
 
           const id = insertImage({
@@ -138,17 +192,18 @@ export const POST: APIRoute = async ({ request }) => {
             original_name: filename,
             width: dims.width,
             height: dims.height,
-            bytes: buf.length,
+            bytes: bytesWritten,
             mime: mimeType,
             exif: exif as Record<string, unknown>,
           });
+
           uploaded.push({
             id,
             path: stored,
             original_name: filename,
             width: dims.width,
             height: dims.height,
-            bytes: buf.length,
+            bytes: bytesWritten,
             mime: mimeType,
             exif: exif as Record<string, unknown>,
           });
@@ -167,8 +222,9 @@ export const POST: APIRoute = async ({ request }) => {
     });
 
     busboy.on('error', (err) => {
-      finished = true;
-      resolve(json({ error: err.message, uploaded, errors }, 500));
+      if (!resolved) {
+        safeResolve({ error: err.message, uploaded, errors }, 500);
+      }
     });
 
     nodeStream.pipe(busboy);
@@ -189,6 +245,7 @@ function extensionFromMime(mime: string): string | null {
     case 'image/webp': return 'webp';
     case 'image/heic': return 'heic';
     case 'image/avif': return 'avif';
+    case 'image/tiff': return 'tif';
     default: return null;
   }
 }
@@ -198,11 +255,11 @@ function extensionFromName(name: string): string | null {
   return m ? m[1]!.toLowerCase() : null;
 }
 
-// Minimal image dimension reader — covers JPEG, PNG. Falls back to null for others.
-async function readDimensions(
+// Minimal image dimension reader — covers JPEG, PNG, WebP. Falls back to null.
+function readDimensions(
   buf: Buffer,
   mime: string,
-): Promise<{ width: number | null; height: number | null }> {
+): { width: number | null; height: number | null } {
   try {
     if (mime === 'image/jpeg' && buf[0] === 0xff && buf[1] === 0xd8) {
       let i = 2;
@@ -210,7 +267,6 @@ async function readDimensions(
         if (buf[i] !== 0xff) return { width: null, height: null };
         const marker = buf[i + 1]!;
         const segLen = buf.readUInt16BE(i + 2);
-        // SOFn markers: 0xC0..0xCF except C4, C8, CC
         if (
           (marker >= 0xc0 && marker <= 0xcf) &&
           marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc
@@ -225,6 +281,18 @@ async function readDimensions(
       const w = buf.readUInt32BE(16);
       const h = buf.readUInt32BE(20);
       return { width: w, height: h };
+    } else if (mime === 'image/webp' && buf.toString('ascii', 0, 4) === 'RIFF') {
+      if (buf.toString('ascii', 12, 16) === 'VP8 ') {
+        const w = buf.readUInt16LE(26) & 0x3fff;
+        const h = buf.readUInt16LE(28) & 0x3fff;
+        return { width: w, height: h };
+      }
+      if (buf.toString('ascii', 12, 16) === 'VP8L') {
+        const b0 = buf[21]!; const b1 = buf[22]!; const b2 = buf[23]!; const b3 = buf[24]!;
+        const w = 1 + (((b1 & 0x3f) << 8) | b0);
+        const h = 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6));
+        return { width: w, height: h };
+      }
     }
   } catch {
     // ignore
