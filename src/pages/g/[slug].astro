@@ -8,6 +8,7 @@ import {
 } from '../../lib/db';
 import { adaptImage, type AdaptedImage } from '../../lib/image-adapter';
 import { templateDefaults, VALID_TEMPLATES, type GalleryTemplateId, type FrameStyle } from '../../lib/gallery-schemas';
+import { readGalleryUnlock } from '../../lib/auth';
 import GridGallery from '../../components/gallery/GridGallery.astro';
 import MasonryGallery from '../../components/gallery/MasonryGallery.astro';
 import LightboxGallery from '../../components/gallery/LightboxGallery.astro';
@@ -15,10 +16,10 @@ import CoverGallery from '../../components/gallery/CoverGallery.astro';
 import CarouselGallery from '../../components/gallery/CarouselGallery.astro';
 import SlideshowGallery from '../../components/gallery/SlideshowGallery.astro';
 import JustifiedGallery from '../../components/gallery/JustifiedGallery.astro';
-import PolaroidGallery from '../../components/gallery/PolaroidGallery.astro';
 import MosaicGallery from '../../components/gallery/MosaicGallery.astro';
 import CinemaGallery from '../../components/gallery/CinemaGallery.astro';
 import FramedGallery from '../../components/gallery/FramedGallery.astro';
+import ContactSheetGallery from '../../components/gallery/ContactSheetGallery.astro';
 import TemplatePicker from '../../components/gallery/TemplatePicker.astro';
 import FramePicker from '../../components/gallery/FramePicker.astro';
 import { galleries as sampleGalleries } from '../../data/galleries';
@@ -33,6 +34,17 @@ const dbGallery = slug ? getGalleryBySlug(slug) : undefined;
 if (!dbGallery) {
   return Astro.redirect('/');
 }
+
+// Password gate — if the gallery has a password_hash, the visitor must
+// have a valid unlock cookie. Otherwise show the password form.
+const isProtected = Boolean(dbGallery.password_hash);
+const unlocked = isProtected ? readGalleryUnlock(Astro.request, dbGallery.id) : true;
+const passwordError = Astro.url.searchParams.get('error') === 'invalid-password'
+  ? 'Wrong password. Try again.'
+  : Astro.url.searchParams.get('error') === 'ratelimit'
+    ? 'Too many attempts. Wait a few minutes.'
+    : null;
+void unlocked; void passwordError; // referenced from conditional branch below
 
 // Pick template — query param > gallery default > 'masonry'
 const templateParam = Astro.url.searchParams.get('t');
@@ -96,6 +108,11 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
           </a>
         ))}
         <a href="/upload" class="page-header__upload">↑ Upload</a>
+        {Astro.locals.admin ? (
+          <a href="/admin" class="page-header__lock" title="Dashboard">⚙</a>
+        ) : (
+          <a href="/admin/login" class="page-header__lock" title="Sign in">🔒</a>
+        )}
       </nav>
     </header>
 
@@ -111,8 +128,8 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
           </p>
         </div>
         <div class="gallery-page__head-actions">
-          <TemplatePicker current={template} gallerySlug={dbGallery.slug} />
-          <FramePicker current={frameStyle} gallerySlug={dbGallery.slug} template={template} />
+          <TemplatePicker current={template} gallerySlug={dbGallery.slug} galleryId={dbGallery.id} frame={frameStyle} />
+          <FramePicker current={frameStyle} gallerySlug={dbGallery.slug} galleryId={dbGallery.id} template={template} />
         </div>
       </section>
 
@@ -130,14 +147,14 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
       {template === 'carousel' && images.length > 0 && <CarouselGallery images={images} config={config} galleryTitle={dbGallery.title} />}
       {template === 'slideshow' && images.length > 0 && <SlideshowGallery images={images} config={config} galleryTitle={dbGallery.title} />}
       {template === 'justified' && images.length > 0 && <JustifiedGallery images={images} config={config} galleryTitle={dbGallery.title} />}
-      {template === 'polaroid' && images.length > 0 && <PolaroidGallery images={images} config={config} galleryTitle={dbGallery.title} />}
       {template === 'mosaic' && images.length > 0 && <MosaicGallery images={images} config={config} galleryTitle={dbGallery.title} />}
       {template === 'cinema' && images.length > 0 && <CinemaGallery images={images} config={config} galleryTitle={dbGallery.title} />}
       {template === 'framed' && images.length > 0 && <FramedGallery images={images} config={config} galleryTitle={dbGallery.title} />}
+      {template === 'contact-sheet' && images.length > 0 && <ContactSheetGallery images={images} config={config} gallerySlug={dbGallery.slug} galleryTitle={dbGallery.title} />}
     </main>
 
     <footer class="page-footer">
-      <span>SnappyDo v0.4 — 11 templates + photo zoom + watermarks</span>
+      <span>SnappyDo v0.6 — auth + dashboard</span>
       <span>Template: <code>{template}</code></span>
     </footer>
 
@@ -194,6 +211,15 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
         font-weight: 500;
         margin-left: 0.5rem;
       }
+      .page-header__lock {
+        padding: 0.4375rem 0.625rem;
+        border-radius: 999px;
+        color: #888;
+        text-decoration: none;
+        font-size: 0.875rem;
+        margin-left: 0.25rem;
+      }
+      .page-header__lock:hover { color: #fafafa; background: rgba(255, 255, 255, 0.06); }
       .gallery-page {
         max-width: 1400px;
         margin: 0 auto;
@@ -268,3 +294,4 @@ const allDbGalleries = (await import('../../lib/db')).listGalleries();
     </style>
   </body>
 </html>
+)}

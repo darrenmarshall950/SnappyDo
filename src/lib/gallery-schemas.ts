@@ -16,9 +16,14 @@ export type GalleryTemplateId =
   | 'carousel'
   | 'slideshow'
   | 'justified'
-  | 'polaroid'
   | 'mosaic'
-  | 'cinema';
+  | 'cinema'
+  | 'framed'
+  | 'contact-sheet';
+
+export type FrameStyle = 'none' | 'matte' | 'gallery' | 'polaroid';
+
+export const VALID_FRAMES: FrameStyle[] = ['none', 'matte', 'gallery', 'polaroid'];
 
 export type TemplateConfig = {
   gap: number; // pixels between images
@@ -123,15 +128,6 @@ export const justifiedConfig: TemplateConfig = {
   showExif: false,
 };
 
-export const polaroidConfig: TemplateConfig = {
-  ...defaultConfig,
-  gap: 32,
-  columns: 3,
-  aspectRatio: 'preserve',
-  showCaptions: true,
-  showExif: false,
-};
-
 export const mosaicConfig: TemplateConfig = {
   ...defaultConfig,
   gap: 8,
@@ -162,6 +158,15 @@ export const framedConfig: TemplateConfig = {
   frame: 'matte',
 };
 
+export const contactSheetConfig: TemplateConfig = {
+  ...defaultConfig,
+  gap: 0,
+  columns: 5,
+  aspectRatio: 'landscape',
+  showCaptions: false,
+  showExif: false,
+};
+
 export const templateDefaults: Record<GalleryTemplateId, TemplateConfig> = {
   grid: gridConfig,
   masonry: masonryConfig,
@@ -170,10 +175,10 @@ export const templateDefaults: Record<GalleryTemplateId, TemplateConfig> = {
   carousel: carouselConfig,
   slideshow: slideshowConfig,
   justified: justifiedConfig,
-  polaroid: polaroidConfig,
   mosaic: mosaicConfig,
   cinema: cinemaConfig,
   framed: framedConfig,
+  'contact-sheet': contactSheetConfig,
 };
 
 export const templateMeta: Record<GalleryTemplateId, { name: string; description: string }> = {
@@ -205,10 +210,6 @@ export const templateMeta: Record<GalleryTemplateId, { name: string; description
     name: 'Justified',
     description: 'Variable-height rows justified to a fixed width. Flickr/500px style.',
   },
-  polaroid: {
-    name: 'Polaroid',
-    description: 'Scattered rotated photos on a dark background. Casual, scrapbook.',
-  },
   mosaic: {
     name: 'Mosaic',
     description: 'Magazine-style mixed-size grid with hero-led rhythm.',
@@ -221,6 +222,10 @@ export const templateMeta: Record<GalleryTemplateId, { name: string; description
     name: 'Framed',
     description: 'Each photo in a subtle matte or gallery frame. Museum-print feel.',
   },
+  'contact-sheet': {
+    name: 'Contact sheet',
+    description: 'Vintage 35mm contact print on a photographer light box. Film strips with sprocket holes.',
+  },
 };
 
 export const VALID_TEMPLATES: GalleryTemplateId[] = [
@@ -231,8 +236,8 @@ export const VALID_TEMPLATES: GalleryTemplateId[] = [
   'carousel',
   'slideshow',
   'justified',
-  'polaroid',
   'mosaic',
   'cinema',
   'framed',
+  'contact-sheet',
 ];

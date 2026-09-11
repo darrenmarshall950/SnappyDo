@@ -1,0 +1,273 @@
+---
+/**
+ * ContactSheetGallery — vintage 35mm contact print.
+ *
+ * Visual brief:
+ *   - Warm off-white "light box" background like a photographer's light table
+ *   - Multiple horizontal film strips stacked top-to-bottom
+ *   - Each strip: black film base, sprocket holes top + bottom (35mm style)
+ *   - Edge text running down left side of each strip (rotated -90°)
+ *   - Frame numbers above each photo (01A, 02A, etc.)
+ *   - Hover: photo brightens, frame number outline highlights
+ *   - Click → existing Lightbox overlay
+ *
+ * Slice pattern: groups of `framesPerStrip` images (default 5) form one roll.
+ * Edge text is configurable per-template; defaults to "KODAK PORTRA 400".
+ *
+ * Sister component to MosaicGallery / CinemaGallery — same data shape, same
+ * lightbox trigger (`data-lightbox-trigger`, `data-image-id`).
+ */
+import type { AdaptedImage } from '../../lib/image-adapter';
+import type { TemplateConfig } from '../../lib/gallery-schemas';
+import Lightbox from './Lightbox.astro';
+
+interface Props {
+  images: AdaptedImage[];
+  config: TemplateConfig;
+  gallerySlug: string;
+  galleryTitle?: string;
+}
+
+const { images, config, gallerySlug, galleryTitle } = Astro.props;
+
+const framesPerStrip = (config.columns && config.columns >= 4 && config.columns <= 7)
+  ? config.columns
+  : 5; // classic 35mm contact sheet is 5 or 6 across — 5 is the safe default
+const sprocketHoleCount = Math.max(8, framesPerStrip * 2); // 2 per frame minimum
+const edgeText = (config.watermark?.text && config.watermark.text.length > 0)
+  ? config.watermark.text
+  : 'KODAK PORTRA 400';
+const year = new Date().getFullYear();
+const rollText = `${edgeText} • ${gallerySlug.toUpperCase()} • 135 • 36 EXP • ${year}`;
+
+// Slice images into rows of framesPerStrip. Final row may be short.
+const strips: AdaptedImage[][] = [];
+for (let i = 0; i < images.length; i += framesPerStrip) {
+  strips.push(images.slice(i, i + framesPerStrip));
+}
+---
+
+<div
+  class="cs"
+  data-template="contact-sheet"
+  data-gallery={gallerySlug}
+  style={`--bg:${config.background};--fg:${config.textColor};`}
+>
+  <div class="cs__table" role="list">
+    {strips.map((strip, stripIdx) => {
+      const rollNumber = String(stripIdx + 1).padStart(2, '0');
+      return (
+        <article class="cs__strip" role="listitem" aria-label={`Roll ${rollNumber}`}>
+          {/* Top sprocket holes row */}
+          <div class="cs__sprockets" aria-hidden="true">
+            {Array.from({ length: sprocketHoleCount }).map((_, i) => (
+              <span class="cs__hole" style={`--i:${i}`}></span>
+            ))}
+          </div>
+
+          {/* Film body with frames + edge text */}
+          <div class="cs__film">
+            {/* Vertical edge text running DOWN the left edge */}
+            <span class="cs__edge-text" aria-hidden="true">{rollText}</span>
+
+            <div class="cs__frames" style={`--frames:${framesPerStrip};`}>
+              {strip.map((img, frameIdx) => {
+                const absIdx = stripIdx * framesPerStrip + frameIdx;
+                const frameLabel = `${String(stripIdx + 1).padStart(2, '0')}${String.fromCharCode(65 + frameIdx)}`;
+                return (
+                  <figure class="cs__frame" data-lightbox-trigger data-image-id={img.id}>
+                    <span class="cs__frame-num" aria-hidden="true">{frameLabel}</span>
+                    <img
+                      src={img.thumb}
+                      srcset={img.srcset}
+                      sizes={`(max-width: 720px) ${Math.round(100 / Math.max(3, framesPerStrip))}vw, ${Math.round(100 / framesPerStrip)}vw`}
+                      alt={img.alt}
+                      loading={absIdx < 5 ? 'eager' : 'lazy'}
+                      decoding="async"
+                      width={img.width}
+                      height={img.height}
+                    />
+                  </figure>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Bottom sprocket holes row */}
+          <div class="cs__sprockets" aria-hidden="true">
+            {Array.from({ length: sprocketHoleCount }).map((_, i) => (
+              <span class="cs__hole" style={`--i:${i}`}></span>
+            ))}
+          </div>
+
+          {/* Roll label below strip */}
+          <p class="cs__roll-label" aria-hidden="true">— Roll {rollNumber} of {strips.length} —</p>
+        </article>
+      );
+    })}
+  </div>
+
+  {galleryTitle && (
+    <p class="cs__caption">Contact sheet preview · {galleryTitle}</p>
+  )}
+</div>
+
+<Lightbox images={images} config={config} gallerySlug={gallerySlug} />
+
+<style>
+  .cs {
+    --lightbox-bg: #ece5d4; /* warm light-table cream */
+    --film-base: #0e0e0e;
+    --film-shadow: #1a1a1a;
+    --hole-color: var(--lightbox-bg);
+    --edge-text-color: rgba(245, 230, 200, 0.55);
+    background:
+      radial-gradient(circle at 50% 0%, #f8f2e2 0%, var(--lightbox-bg) 60%, #d8cfba 100%);
+    color: var(--fg);
+    padding: clamp(2rem, 5vw, 5rem) clamp(0.5rem, 2vw, 2rem);
+    min-height: 60vh;
+  }
+
+  .cs__table {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: clamp(2rem, 4vw, 3.5rem);
+  }
+
+  .cs__strip {
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(180deg, var(--film-shadow) 0%, var(--film-base) 8%, var(--film-base) 92%, var(--film-shadow) 100%);
+    border-radius: 2px;
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.04) inset,
+      0 24px 60px -20px rgba(0, 0, 0, 0.45),
+      0 6px 18px -8px rgba(0, 0, 0, 0.35);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Sprocket rows (top + bottom) — mirror layout */
+  .cs__sprockets {
+    height: 14px;
+    background: var(--film-base);
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 8px;
+  }
+  .cs__hole {
+    width: 10px;
+    height: 8px;
+    background: var(--hole-color);
+    border-radius: 1px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3) inset;
+  }
+
+  /* The dark film body holding frames + edge text */
+  .cs__film {
+    position: relative;
+    padding: clamp(1.25rem, 2.5vw, 2rem) clamp(1.5rem, 3vw, 2.25rem);
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.02) 0%, transparent 50%, rgba(0,0,0,0.4) 100%),
+      var(--film-base);
+  }
+
+  /* Vertical edge text on the LEFT edge */
+  .cs__edge-text {
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%) rotate(-90deg);
+    transform-origin: left center;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.625rem;
+    letter-spacing: 0.32em;
+    color: var(--edge-text-color);
+    text-transform: uppercase;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  /* Frames grid */
+  .cs__frames {
+    display: grid;
+    grid-template-columns: repeat(var(--frames), minmax(0, 1fr));
+    gap: clamp(4px, 0.8vw, 8px);
+  }
+
+  .cs__frame {
+    position: relative;
+    margin: 0;
+    background: #000;
+    overflow: hidden;
+    cursor: zoom-in;
+    aspect-ratio: 3 / 2;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.06) inset,
+      0 0 0 1px rgba(0, 0, 0, 0.6);
+  }
+
+  .cs__frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    filter: brightness(0.92) contrast(1.02);
+    transition: filter 0.35s ease, transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .cs__frame:hover img,
+  .cs__frame:focus-visible img {
+    filter: brightness(1.04) contrast(1.04);
+    transform: scale(1.03);
+  }
+
+  .cs__frame-num {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    z-index: 1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.5625rem;
+    letter-spacing: 0.08em;
+    color: rgba(245, 230, 200, 0.55);
+    background: rgba(0, 0, 0, 0.35);
+    padding: 1px 4px;
+    border-radius: 1px;
+    pointer-events: none;
+  }
+
+  .cs__roll-label {
+    text-align: center;
+    margin: 0;
+    padding: 6px 0 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6875rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(20, 18, 14, 0.55);
+    background: var(--lightbox-bg);
+  }
+
+  .cs__caption {
+    text-align: center;
+    margin-top: 2.5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: rgba(20, 18, 14, 0.6);
+  }
+
+  /* Responsive: drop to 4 frames per row on tablet, 3 on phone */
+  @media (max-width: 900px) {
+    .cs__frames { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+  }
+  @media (max-width: 600px) {
+    .cs__frames { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+    .cs__edge-text { font-size: 0.5625rem; letter-spacing: 0.24em; }
+  }
+</style>
