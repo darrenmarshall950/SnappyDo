@@ -89,7 +89,7 @@ images.forEach((img, i) => {
             <div class="cs__frames">
               {strip.map((img, frameIdx) => {
                 const absIdx = (frameIdx * stripsAcross) + stripIdx;
-                const frameLabel = `${String(absIdx + 1).padStart(2, '0')}A`;
+                const frameLabel = `${String(frameIdx + 1).padStart(2, '0')}${String.fromCharCode(65 + stripIdx)}`;
                 return (
                   <figure class="cs__frame" data-lightbox-trigger data-image-id={img.id} aria-label={`Frame ${frameLabel}`}>
                     <span class="cs__frame-num" aria-hidden="true">{frameLabel}</span>
