@@ -764,9 +764,34 @@ const sourceUrl = `/api/images/${img.id}/source`;
         }
       }
 
+      // Flag set by Save / Revert so onload can wipe the local overlay state
+      // and present the saved result cleanly. Without this, the crop dim mask,
+      // crop border/handles, and #vignette-overlay DOM element all stay on the
+      // canvas and look like a "vignetted box at the centre" sitting on top
+      // of the (correctly baked) saved image.
+      let _resetOnLoad = false;
+      const SLIDER_KEYS = ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette'];
+      function resetAllStateAndUi() {
+        for (const k of SLIDER_KEYS) state[k] = 0;
+        state.crop = null;
+        cropBox = null;
+        currentAspect = null;
+        document.querySelectorAll('.slider').forEach((wrap) => {
+          const input = wrap.querySelector('input');
+          const valEl = wrap.querySelector('.val');
+          if (input) input.value = 0;
+          if (valEl) valEl.textContent = '0';
+        });
+        document.querySelectorAll('[data-aspect]').forEach((b) => b.classList.remove('active'));
+      }
+
       sourceImage.onload = () => {
         fitCanvasToArea();
         _sharpenCacheKey = -1; // invalidate any stale sharpen cache
+        if (_resetOnLoad) {
+          _resetOnLoad = false;
+          resetAllStateAndUi();
+        }
         applyVignetteOverlay();
         draw();
         setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + '. Display ' + canvas.width + 'x' + canvas.height + '.');
@@ -1026,9 +1051,15 @@ const sourceUrl = `/api/images/${img.id}/source`;
           });
           if (!res.ok) throw new Error(await res.text());
           const data = await res.json();
-          setStatus('Saved #' + data.edit.id + ' at ' + new Date(data.edit.created_at + 'Z').toLocaleTimeString() + '.');
+          setStatus('Saved #' + data.edit.id + ' at ' + new Date(data.edit.created_at + 'Z').toLocaleTimeString() + '. Reloading preview from saved result…');
           btnRevert.disabled = false;
           toast('Edit saved.');
+          // Reload the source from the CORS endpoint so the canvas preview
+          // reflects the SAVED file (imgproxy URL would CORS-taint the canvas
+          // and break further saves). Cache-buster avoids the 5-min browser
+          // cache on /source serving the previous render.
+          _resetOnLoad = true;
+          sourceImage.src = '/api/images/' + imageId + '/source?ts=' + Date.now();
         } catch (e) {
           console.error(e);
           setStatus('Save failed: ' + e.message, true);
@@ -1043,8 +1074,10 @@ const sourceUrl = `/api/images/${img.id}/source`;
         try {
           const res = await fetch('/api/images/' + imageId + '/edit', { method: 'DELETE' });
           if (!res.ok) throw new Error(await res.text());
-          setStatus('Reverted to original.');
+          setStatus('Reverted to original. Reloading…');
           toast('Reverted.');
+          _resetOnLoad = true;
+          sourceImage.src = '/api/images/' + imageId + '/source?ts=' + Date.now();
         } catch (e) {
           setStatus('Revert failed: ' + e.message, true);
           btnRevert.disabled = false;
