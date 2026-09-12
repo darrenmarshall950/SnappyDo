@@ -49,6 +49,16 @@ const sourceUrl = `/api/images/${img.id}/source`;
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Edit — {img.original_name}</title>
+    <svg width="0" height="0" style="position: absolute; pointer-events: none" aria-hidden="true">
+      <defs>
+        <filter id="snappydo-sharpen">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="0.0001" result="blur" />
+          <feConvolveMatrix in="SourceGraphic" order="3" preserveAlpha="true"
+            kernelMatrix="0 -1 0  -1 5 -1  0 -1 0" result="sharp" />
+          <feComposite in="sharp" in2="SourceGraphic" operator="arithmetic" k1="0" k2="1" k3="1" k4="0" />
+        </filter>
+      </defs>
+    </svg>
     <style>
       :root {
         --bg: #0a0a0a;
@@ -172,6 +182,17 @@ const sourceUrl = `/api/images/${img.id}/source`;
         cursor: crosshair;
         display: block;
       }
+      .vignette-overlay {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        opacity: 0;
+        background: radial-gradient(ellipse at center,
+          rgba(0,0,0,0) 30%,
+          rgba(0,0,0,0.85) 100%);
+        transition: opacity 0.1s ease;
+      }
       .canvas-hint {
         position: absolute;
         bottom: 1rem;
@@ -269,6 +290,14 @@ const sourceUrl = `/api/images/${img.id}/source`;
         color: var(--accent-fg);
         border-color: var(--accent-bg);
       }
+      .btn-compare-pill {
+        padding: 0.5rem 1rem;
+        font-weight: 600;
+        background: var(--bg);
+        border-color: var(--accent);
+        color: var(--accent-fg);
+      }
+      .btn-compare-pill.active { background: var(--accent-bg); color: white; }
       .compare-indicator {
         position: fixed;
         top: 50%;
@@ -399,7 +428,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
         </div>
         <div class="top-actions">
           <button class="btn" id="btn-reset">Reset</button>
-          <button class="btn btn--ghost" id="btn-compare" type="button" aria-label="Hold to compare original">⏷ Compare</button>
+          <button class="btn btn--ghost btn-compare-pill" id="btn-compare" type="button" aria-label="Hold to compare original" title="Hold to compare original (or press SPACE)">⏷ Hold to compare</button>
           <button class="btn btn--danger" id="btn-revert" disabled={!latestEdit}>Revert to original</button>
           <button class="btn btn--primary" id="btn-save">Save edit</button>
         </div>
@@ -408,6 +437,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
       <div class="canvas-area">
         <div class="canvas-wrap">
           <canvas id="preview"></canvas>
+          <div id="vignette-overlay" class="vignette-overlay"></div>
           <div id="crop-overlay"></div>
           <div class="canvas-hint">Drag on the image to set a crop · Sliders adjust live · Save to bake it in</div>
         </div>
@@ -576,8 +606,24 @@ const sourceUrl = `/api/images/${img.id}/source`;
           const ends = (s.whites - s.blacks) / 100;
           f.push('contrast(' + (100 + ends * 12) + '%)');
         }
+        // Sharpen: chain a CSS-inlinable unsharp mask via the inline SVG filter
+        if (s.sharpen > 0) {
+          const sigma = (s.sharpen / 100) * 1.5;  // 0..1.5px effective blurr
+          f.push('url(#snappydo-sharpen)');
+        }
         return f.join(' ');
       }
+
+      // Apply vignette overlay opacity (separate from canvas filter — vignette is a DOM overlay)
+      const vignetteEl = document.getElementById('vignette-overlay');
+      function applyVignetteOverlay() {
+        const v = Number(state.vignette) || 0;
+        if (v <= 0) { vignetteEl.style.opacity = '0'; return; }
+        // 0..100 → 0..0.85 opacity
+        const o = Math.max(0.05, Math.min(0.85, v / 100 * 0.85));
+        vignetteEl.style.opacity = String(o);
+      }
+      window.applyVignetteOverlay = applyVignetteOverlay;
 
       function fitCanvasToArea() {
         const area = document.querySelector('.canvas-area');
@@ -660,6 +706,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
           const v = Number(input.value);
           state[key] = v;
           valEl.textContent = v;
+          applyVignetteOverlay();
           draw();
         });
       });
