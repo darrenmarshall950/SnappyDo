@@ -130,25 +130,55 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
 
   const vignette = Number(params.vignette) || 0;     // 0..100
   if (vignette > 0) {
-    // Build a radial SVG vignette mask and composite via `multiply`.
-    // amount 0..1 — strength of darkening at the corners. amount > 0 darkens.
+    // Build a radial grayscale mask and composite via `multiply`.
+    //
+    // Why raw RGB and not SVG: the previous SVG-radialGradient approach went
+    // through librsvg and was rendering INVERTED — centre came out solid
+    // black and corners barely tinted. Multiplied, that turned the centre of
+    // the saved image into a black rectangle ("vignetted box at centre")
+    // while leaving the corners alone. Raw RGB pixels are unambiguous.
+    //
+    // Mask convention: 255 (white) = no darkening at multiply blend;
+    // 0 (black) = full darkening. So we draw white at the centre and drop
+    // smoothly to dark at the corners.
     const amount = Math.max(0.05, Math.min(0.95, vignette / 100));
-    const cx = 50, cy = 50;
-    const stopInner = 30 - amount * 15;   // brighter at centre
-    const stopOuter = 95;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 100 100" preserveAspectRatio="none">
-      <defs>
-        <radialGradient id="g" cx="${cx}%" cy="${cy}%" r="60%">
-          <stop offset="0%" stop-color="white" stop-opacity="0"/>
-          <stop offset="${stopInner}%" stop-color="white" stop-opacity="0"/>
-          <stop offset="${stopOuter}%" stop-color="black" stop-opacity="${(0.25 + amount * 0.55).toFixed(3)}"/>
-          <stop offset="100%" stop-color="black" stop-opacity="${(0.5 + amount * 0.4).toFixed(3)}"/>
-        </radialGradient>
-      </defs>
-      <rect width="100" height="100" fill="url(#g)"/>
-    </svg>`;
-    const vigBuf = Buffer.from(svg);
-    pipeline = pipeline.composite([{ input: vigBuf, blend: 'multiply' }]);
+    const cropMeta = await pipeline.metadata();
+    const W = cropMeta.width || 1;
+    const H = cropMeta.height || 1;
+    const cx = W / 2;
+    const cy = H / 2;
+    // Normalised radius in elliptical space — corners land at ~1.0.
+    const normX = W / 2;
+    const normY = H / 2;
+    const innerStop = 0.30 - amount * 0.15;   // 0.15..0.30 of the ellipse
+    const cornerDarken = 0.25 + amount * 0.55; // 0.275..0.80 darken at corners
+    const mask = Buffer.alloc(W * H * 3);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const dx = (x - cx) / normX;
+        const dy = (y - cy) / normY;
+        const d = Math.sqrt(dx * dx + dy * dy);   // 0 at centre, ~1 at corners
+        let v: number;                              // 255 = white (no effect)
+        if (d <= innerStop) {
+          v = 255;
+        } else if (d >= 1.0) {
+          v = Math.round(255 * (1 - cornerDarken));
+        } else {
+          // Smooth ease from innerStop..1.0 — darken ramps from 0 to cornerDarken.
+          const t = (d - innerStop) / (1.0 - innerStop);
+          // easeInOut for nicer falloff
+          const eased = t * t * (3 - 2 * t);
+          v = Math.round(255 * (1 - eased * cornerDarken));
+        }
+        const idx = (y * W + x) * 3;
+        mask[idx] = v; mask[idx + 1] = v; mask[idx + 2] = v;
+      }
+    }
+    pipeline = pipeline.composite([{
+      input: mask,
+      raw: { width: W, height: H, channels: 3 },
+      blend: 'multiply',
+    }]);
   }
 
   const buf = await pipeline.jpeg({ quality: 95, mozjpeg: true }).toBuffer();
