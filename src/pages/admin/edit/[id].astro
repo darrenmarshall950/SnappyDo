@@ -1095,15 +1095,16 @@ const sourceUrl = `/api/images/${img.id}/source`;
         statusEl.classList.add('error');
       };
       statusEl.textContent = 'Loading source…';
-      try { sourceImage.src = sourceUrl; }
-      catch (e) { _setStatus('Image start failed: ' + e.message, true); }
-      // Close bootstrap try
-      } catch (bootErr) {
-        _setStatus('Startup error: ' + bootErr.message + ' | ' + (bootErr.stack || '').split('\n').slice(0, 2).join(' > '), true);
+      try {
+        sourceImage.src = sourceUrl;
+      } catch (e) {
+        _setStatus('Image start failed: ' + e.message, true);
       }
-      catch (e) {
-        statusEl.textContent = 'Could not start image load: ' + e.message;
+      // End of outer bootstrap try
+      } catch (bootErr) {
+        statusEl.textContent = 'Startup error: ' + bootErr.message;
         statusEl.classList.add('error');
+        console.error(bootErr);
       }
 
       window.addEventListener('resize', () => {
