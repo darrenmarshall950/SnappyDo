@@ -51,11 +51,9 @@ const sourceUrl = `/api/images/${img.id}/source`;
     <title>Edit — {img.original_name}</title>
     <svg width="0" height="0" style="position: absolute; pointer-events: none" aria-hidden="true">
       <defs>
-        <filter id="snappydo-sharpen">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="0.0001" result="blur" />
-          <feConvolveMatrix in="SourceGraphic" order="3" preserveAlpha="true"
-            kernelMatrix="0 -1 0  -1 5 -1  0 -1 0" result="sharp" />
-          <feComposite in="sharp" in2="SourceGraphic" operator="arithmetic" k1="0" k2="1" k3="1" k4="0" />
+        <filter id="snappydo-sharpen" x="0%" y="0%" width="100%" height="100%">
+          <feConvolveMatrix id="snappydo-sharpen-kernel" order="3" preserveAlpha="true"
+            kernelMatrix="0 0 0  0 1 0  0 0 0" />
         </filter>
       </defs>
     </svg>
@@ -298,6 +296,18 @@ const sourceUrl = `/api/images/${img.id}/source`;
         color: var(--accent-fg);
       }
       .btn-compare-pill.active { background: var(--accent-bg); color: white; }
+      .kbd-key {
+        display: inline-block;
+        padding: 0.1rem 0.5rem;
+        margin-right: 0.4rem;
+        background: var(--accent-bg);
+        color: white;
+        border-radius: 4px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+      }
       .compare-indicator {
         position: fixed;
         top: 50%;
@@ -428,7 +438,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
         </div>
         <div class="top-actions">
           <button class="btn" id="btn-reset">Reset</button>
-          <button class="btn btn--ghost btn-compare-pill" id="btn-compare" type="button" aria-label="Hold to compare original" title="Hold to compare original (or press SPACE)">⏷ Hold to compare</button>
+          <button class="btn btn--ghost btn-compare-pill" id="btn-compare" type="button" aria-label="Hold to compare original" title="Hold to compare original (or press SPACE)" aria-pressed="false"><span class="kbd-key">Hold</span> See original</button>
           <button class="btn btn--danger" id="btn-revert" disabled={!latestEdit}>Revert to original</button>
           <button class="btn btn--primary" id="btn-save">Save edit</button>
         </div>
@@ -606,9 +616,8 @@ const sourceUrl = `/api/images/${img.id}/source`;
           const ends = (s.whites - s.blacks) / 100;
           f.push('contrast(' + (100 + ends * 12) + '%)');
         }
-        // Sharpen: chain a CSS-inlinable unsharp mask via the inline SVG filter
+        // Sharpen: chain the inline SVG filter (kernel rebuilt by updateSharpenKernel)
         if (s.sharpen > 0) {
-          const sigma = (s.sharpen / 100) * 1.5;  // 0..1.5px effective blurr
           f.push('url(#snappydo-sharpen)');
         }
         return f.join(' ');
@@ -624,6 +633,27 @@ const sourceUrl = `/api/images/${img.id}/source`;
         vignetteEl.style.opacity = String(o);
       }
       window.applyVignetteOverlay = applyVignetteOverlay;
+
+      // ---- Sharpen kernel: rebuilds the SVG feConvolveMatrix kernel from
+      // the slider value. The previous kernel was too aggressive — for an
+      // edge where I=200, ngh=50 the output was 5*200 - 4*50 = 800, clamped
+      // to white; for the inverse, clamped to black. Whole image went black.
+      // New kernel: c - 4k = 1 (preserves brightness). At slider=0 → identity
+      // (1,0,0,0,1,0,0,0,1); at slider=100 → mild sharpen (0,-.5,0;-.5,3,-.5;0,-.5,0).
+      const sharpenKernelEl = document.getElementById('snappydo-sharpen-kernel');
+      function updateSharpenKernel(value) {
+        const v = Math.max(0, Math.min(100, Number(value) || 0)) / 100; // 0..1
+        const k = v * 0.5;        // edge contrast amount (0..0.5)
+        const c = 1 + 4 * k;      // centre weight (1..3) — keeps sum = 1
+        // Identity at v=0 (k=0, c=1); progressively sharper at higher v.
+        const m = (
+          '0 ' + (-k).toFixed(3) + ' 0 ' +
+          (-k).toFixed(3) + ' ' + c.toFixed(3) + ' ' + (-k).toFixed(3) + ' ' +
+          '0 ' + (-k).toFixed(3) + ' 0'
+        );
+        sharpenKernelEl.setAttribute('kernelMatrix', m);
+      }
+      window.updateSharpenKernel = updateSharpenKernel;
 
       function fitCanvasToArea() {
         const area = document.querySelector('.canvas-area');
@@ -689,6 +719,9 @@ const sourceUrl = `/api/images/${img.id}/source`;
 
       sourceImage.onload = () => {
         fitCanvasToArea();
+        // Pre-build the sharpen kernel for the loaded initialParams
+        updateSharpenKernel(state.sharpen);
+        applyVignetteOverlay();
         draw();
         setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + '. Display ' + canvas.width + 'x' + canvas.height + '.');
       };
@@ -706,6 +739,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
           const v = Number(input.value);
           state[key] = v;
           valEl.textContent = v;
+          if (key === 'sharpen') updateSharpenKernel(v);
           applyVignetteOverlay();
           draw();
         });
@@ -882,22 +916,12 @@ const sourceUrl = `/api/images/${img.id}/source`;
           const [aw, ah] = asp.split(':').map(Number);
           if (!aw || !ah) return;
           setAspectPreset(aw / ah);
-          if (!cropBox) {
-            // No existing crop — create one centred at this aspect
-            makeCropAtAspect();
-          } else {
-            // Resize existing crop to the new aspect
-            const cx = cropBox.x + cropBox.w / 2;
-            const cy = cropBox.y + cropBox.h / 2;
-            const cur = cropBox.w / cropBox.h;
-            if (cur > currentAspect) {
-              const newW = cropBox.h * currentAspect;
-              cropBox.x = cx - newW / 2; cropBox.w = newW;
-            } else {
-              const newH = cropBox.w / currentAspect;
-              cropBox.y = cy - newH / 2; cropBox.h = newH;
-            }
-          }
+          // ALWAYS reset to a fresh centred crop at this aspect fitted to the
+          // FULL image bounds. Earlier behaviour preserved the old crop's
+          // size when changing presets, so 4:3 → 16:9 cropped INSIDE the 4:3
+          // area instead of replacing it. Now presets replace the crop
+          // outright; dragging is still free-form and keeps current crop.
+          makeCropAtAspect();
           clampCrop(); syncStateCrop(); draw();
         });
       });
