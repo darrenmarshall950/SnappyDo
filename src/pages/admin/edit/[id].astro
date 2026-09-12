@@ -599,6 +599,8 @@ const sourceUrl = `/api/images/${img.id}/source`;
         }
       `;
 
+      // ---- Bootstrap try/catch — report any startup error visibly ----
+      try {
       // ---- State ----
       const state = { ...initialParams };
       const sourceImage = new Image();
@@ -1094,6 +1096,11 @@ const sourceUrl = `/api/images/${img.id}/source`;
       };
       statusEl.textContent = 'Loading source…';
       try { sourceImage.src = sourceUrl; }
+      catch (e) { _setStatus('Image start failed: ' + e.message, true); }
+      // Close bootstrap try
+      } catch (bootErr) {
+        _setStatus('Startup error: ' + bootErr.message + ' | ' + (bootErr.stack || '').split('\n').slice(0, 2).join(' > '), true);
+      }
       catch (e) {
         statusEl.textContent = 'Could not start image load: ' + e.message;
         statusEl.classList.add('error');
@@ -1123,8 +1130,17 @@ const sourceUrl = `/api/images/${img.id}/source`;
           statusEl.classList.toggle('error', !!isErr);
         } catch {}
       };
+      // Old + new: window.onerror sometimes captures more detail than addEventListener('error')
+      window.onerror = function(msg, src, line, col, err) {
+        _setStatus('JS error: ' + (msg || 'unknown') + ' @ ' + (src || '?') + ':' + (line || '?') + ':' + (col || '?') + (err?.stack ? ' | ' + err.stack.split('\n').slice(0, 2).join(' > ') : ''), true);
+        return true;
+      };
       window.addEventListener('error', (ev) => {
-        _setStatus('JS error: ' + (ev.message || ev.error?.message || 'unknown'), true);
+        const msg = ev.message || ev.error?.message || 'unknown';
+        const src = ev.filename || '';
+        const line = ev.lineno ? ':' + ev.lineno + ':' + ev.colno : '';
+        const stack = ev.error?.stack ? '\n' + ev.error.stack.split('\n').slice(0, 3).join(' | ') : '';
+        _setStatus('JS error: ' + msg + (src ? ' @ ' + src + line : '') + stack, true);
       });
       window.addEventListener('unhandledrejection', (ev) => {
         _setStatus('Promise error: ' + (ev.reason?.message || ev.reason || 'unknown'), true);
