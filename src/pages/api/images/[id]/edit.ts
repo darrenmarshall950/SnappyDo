@@ -1,23 +1,29 @@
 /**
  * POST /api/images/:id/edit — save a non-destructive edit for an image.
  *
- * Body: multipart/form-data with:
- *   - 'file': rendered JPEG blob (canvas.toBlob from the WebGL editor)
- *   - 'params': JSON string of edit parameters (for re-editing later)
+ * Accepts TWO body formats:
  *
- * The original file is preserved. The rendered JPEG is stored at
- *   /uploads/edits/{image-id}/edit-{timestamp}.jpg
+ *   (1) multipart/form-data (legacy WebGL editor flow):
+ *       file:    rendered JPEG blob
+ *       params:  JSON string of edit params
  *
- * A row is inserted into image_edits with the params + path.
+ *   (2) application/json (Canvas 2D editor + future server-side pipeline):
+ *       { params: { exposure, contrast, brightness, ... }, sourceUrl? }
+ *       Server reads the original file, applies the same operations via
+ *       sharp (.modulate, .linear, .tint, .extract), writes the rendered
+ *       JPEG to /uploads/edits/{image-id}/edit-{ts}.jpg, persists row.
+ *
+ * Original file is preserved either way.
  *
  * Response: { edit: { id, path, url, params, created_at } }
  *
  * Auth: admin only.
  */
 import type { APIRoute } from 'astro';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import sharp from 'sharp';
 import { getImage } from '../../../../lib/db';
 import {
   insertImageEdit,
@@ -34,16 +40,89 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR || '/app/uploads';
 
 function unauthorized() {
   return new Response(JSON.stringify({ error: 'unauthorized' }), {
-    status: 401,
-    headers: { 'content-type': 'application/json' },
+    status: 401, headers: { 'content-type': 'application/json' },
+  });
+}
+function badRequest(msg: string) {
+  return new Response(JSON.stringify({ error: msg }), {
+    status: 400, headers: { 'content-type': 'application/json' },
   });
 }
 
-function badRequest(msg: string) {
-  return new Response(JSON.stringify({ error: msg }), {
-    status: 400,
-    headers: { 'content-type': 'application/json' },
-  });
+/**
+ * Render the original file with the given params applied via sharp.
+ * Returns the rendered JPEG buffer + the crop coordinates in source pixels
+ * (so the DB row knows what crop was applied, for re-editing).
+ */
+async function renderWithSharp(originalPath: string, params: any): Promise<{ buf: Buffer; appliedCrop: any | null }> {
+  const img = sharp(originalPath, { failOn: 'none' }).rotate(); // honour EXIF orientation
+  const meta = await img.metadata();
+  const W = meta.width || 0;
+  const H = meta.height || 0;
+
+  let pipeline = img;
+
+  // ---- Crop first (UV space 0..1) ----
+  let appliedCrop: any | null = null;
+  if (params.crop && W && H) {
+    const left = Math.max(0, Math.round(params.crop.x * W));
+    const top = Math.max(0, Math.round(params.crop.y * H));
+    const width = Math.max(1, Math.min(W - left, Math.round(params.crop.w * W)));
+    const height = Math.max(1, Math.min(H - top, Math.round(params.crop.h * H)));
+    pipeline = pipeline.extract({ left, top, width, height });
+    appliedCrop = { left, top, width, height };
+  }
+
+  // ---- Adjustments ----
+  // Exposure (-200..200 stops): factor = 2^(exposure/100)
+  const exposure = Number(params.exposure) || 0;
+  const brightness = Number(params.brightness) || 0;
+  const saturation = Number(params.saturation) || 0;
+  const contrast = Number(params.contrast) || 0;
+  const temp = Number(params.temp) || 0;
+  const tint = Number(params.tint) || 0;
+
+  const expFactor = Math.pow(2, exposure / 100);            // 0.25..4
+  const brightFactor = 1 + brightness / 100;                 // 0..2 (additive)
+  const brightnessFactor = expFactor * brightFactor;         // combined
+  const saturationFactor = Math.max(0, 1 + saturation / 100); // 0..2
+
+  if (brightnessFactor !== 1 || saturationFactor !== 1) {
+    pipeline = pipeline.modulate({
+      brightness: brightnessFactor,
+      saturation: saturationFactor,
+    });
+  }
+
+  // Contrast: a * in + b; for contrast +/-100 -> a=2 (or 0); b=(1-a)/2
+  if (contrast !== 0) {
+    const a = 1 + contrast / 100;
+    const b = (1 - a) / 2;
+    pipeline = pipeline.linear(a, b);
+  }
+
+  // WB temp/tint via .tint(). Sharp expects {r,g,b} in 0..255.
+  // temp > 0 = warmer (push red, pull blue). temp < 0 = cooler.
+  // tint > 0 = push green, tint < 0 = push magenta.
+  if (temp !== 0 || tint !== 0) {
+    const t = Math.max(-100, Math.min(100, temp));
+    const u = Math.max(-100, Math.min(100, tint));
+    const rDelta = t * 0.6;        // +/-60 per max temp
+    const bDelta = -t * 0.6;
+    const gDelta = u * 0.5;
+    const base = 240;              // near-white tint base
+    const tintR = Math.max(180, Math.min(255, base + rDelta));
+    const tintG = Math.max(180, Math.min(255, base + gDelta));
+    const tintB = Math.max(180, Math.min(255, base + bDelta));
+    // Mix amount — how strongly to apply the tint (rough approximation)
+    const tintMix = (Math.abs(t) + Math.abs(u)) / 100 * 0.25;  // 0..0.5
+    if (tintMix > 0) {
+      pipeline = pipeline.tint({ r: tintR, g: tintG, b: tintB }).linear(1, 0);
+    }
+  }
+
+  const buf = await pipeline.jpeg({ quality: 95, mozjpeg: true }).toBuffer();
+  return { buf, appliedCrop };
 }
 
 export const POST: APIRoute = async ({ params, request }) => {
@@ -55,31 +134,58 @@ export const POST: APIRoute = async ({ params, request }) => {
   const img = getImage(id);
   if (!img) {
     return new Response(JSON.stringify({ error: 'image not found' }), {
-      status: 404,
-      headers: { 'content-type': 'application/json' },
+      status: 404, headers: { 'content-type': 'application/json' },
     });
   }
 
-  let form: FormData;
-  try {
-    form = await request.formData();
-  } catch (e) {
-    return badRequest('expected multipart/form-data');
+  const contentType = request.headers.get('content-type') || '';
+
+  let paramsObj: any;
+  let renderedBuf: Buffer;
+  let cropApplied: any | null = null;
+
+  if (contentType.includes('application/json')) {
+    // JSON mode — server-side render
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      return badRequest('invalid JSON');
+    }
+    paramsObj = body?.params;
+    if (!paramsObj || typeof paramsObj !== 'object') return badRequest('params required');
+
+    const originalPath = join(UPLOAD_DIR, img.path);
+    try {
+      const r = await renderWithSharp(originalPath, paramsObj);
+      renderedBuf = r.buf;
+      cropApplied = r.appliedCrop;
+    } catch (e: any) {
+      return new Response(JSON.stringify({ error: 'render failed: ' + e.message }), {
+        status: 500, headers: { 'content-type': 'application/json' },
+      });
+    }
+  } else {
+    // Multipart mode (legacy)
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      return badRequest('expected multipart/form-data');
+    }
+    const file = form.get('file');
+    const paramsRaw = form.get('params');
+    if (!file || !(file instanceof File)) return badRequest('file required');
+    if (!paramsRaw || typeof paramsRaw !== 'string') return badRequest('params required');
+    try {
+      paramsObj = JSON.parse(paramsRaw);
+    } catch {
+      return badRequest('params invalid JSON');
+    }
+    renderedBuf = Buffer.from(await file.arrayBuffer());
   }
 
-  const file = form.get('file');
-  const paramsRaw = form.get('params');
-  if (!file || !(file instanceof File)) return badRequest('file required');
-  if (!paramsRaw || typeof paramsRaw !== 'string') return badRequest('params required');
-
-  // Validate params is well-formed JSON
-  try {
-    JSON.parse(paramsRaw);
-  } catch {
-    return badRequest('params invalid JSON');
-  }
-
-  // Write rendered JPEG to /uploads/edits/{image-id}/edit-{timestamp}.jpg
+  // Persist
   const editsDir = join(UPLOAD_DIR, 'edits', String(id));
   if (!existsSync(editsDir)) await mkdir(editsDir, { recursive: true });
   const timestamp = Date.now();
@@ -87,13 +193,13 @@ export const POST: APIRoute = async ({ params, request }) => {
   const fullPath = join(editsDir, filename);
   const relativePath = join('edits', String(id), filename);
 
-  const buf = Buffer.from(await file.arrayBuffer());
-  await writeFile(fullPath, buf);
+  await writeFile(fullPath, renderedBuf);
 
-  // Persist in DB
+  // Persist with crop info merged in (so re-edit knows the exact crop px)
+  const persistedParams = { ...paramsObj, _appliedCrop: cropApplied };
   insertImageEdit({
     image_id: id,
-    params_json: paramsRaw,
+    params_json: JSON.stringify(persistedParams),
     rendered_path: relativePath,
   });
 
@@ -115,10 +221,6 @@ export const POST: APIRoute = async ({ params, request }) => {
   );
 };
 
-/**
- * GET /api/images/:id/edit — fetch the latest edit + full history.
- * Used to pre-populate the editor with current params.
- */
 export const GET: APIRoute = async ({ params, request }) => {
   if (!readAdminSession(request)) return unauthorized();
 
@@ -151,10 +253,6 @@ export const GET: APIRoute = async ({ params, request }) => {
   );
 };
 
-/**
- * DELETE /api/images/:id/edit — discard ALL edits for an image (revert to original).
- * Doesn't touch the original file.
- */
 export const DELETE: APIRoute = async ({ params, request }) => {
   if (!readAdminSession(request)) return unauthorized();
 
@@ -166,7 +264,6 @@ export const DELETE: APIRoute = async ({ params, request }) => {
   try { if (existsSync(editsDir)) rmSync(editsDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
   return new Response(JSON.stringify({ removed }), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
+    status: 200, headers: { 'content-type': 'application/json' },
   });
 };

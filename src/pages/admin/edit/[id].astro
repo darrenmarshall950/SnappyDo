@@ -484,46 +484,361 @@ const sourceUrl = `/api/images/${img.id}/source`;
       initialParams,
       hasExistingEdit: !!latestEdit,
     }}>
-      // ---- MINIMAL DIAGNOSTIC — replace complex WebGL with a basic 2D canvas
-      // render. If this works (image visible), the issue was in the WebGL
-      // shader compilation or texture upload. If this still shows black, the
-      // problem is elsewhere (image src, layout, canvas dimensions).
-      (function () {
-        const status = document.getElementById('status');
-        const canvas = document.getElementById('preview');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          status.textContent = 'Canvas 2D NOT available';
-          status.classList.add('error');
-          return;
-        }
-        status.textContent = 'JS boot OK. Loading…';
 
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => {
-          status.textContent = 'Image loaded ' + img.width + 'x' + img.height + '.';
-          const area = document.querySelector('.canvas-area');
-          const aw = area ? area.clientWidth : window.innerWidth;
-          const ah = area ? area.clientHeight : window.innerHeight;
-          const scale = Math.min(aw / img.width, ah / img.height, 1);
-          const dw = Math.max(1, Math.round(img.width * scale));
-          const dh = Math.max(1, Math.round(img.height * scale));
-          canvas.width = dw;
-          canvas.height = dh;
-          canvas.style.width = dw + 'px';
-          canvas.style.height = dh + 'px';
-          ctx.fillStyle = '#888';
-          ctx.fillRect(0, 0, dw, dh);
-          ctx.drawImage(img, 0, 0, dw, dh);
-          status.textContent = 'Rendered at ' + dw + 'x' + dh + '.';
+      // ---- Canvas 2D editor ----
+      // Phase A: live preview via CSS filter on a Canvas 2D context.
+      // Phase B-ready: Save sends params + crop to server which renders
+      // at full resolution with sharp and writes the JPG to /uploads/edits/{id}/.
+      // The original file is NEVER touched.
+      const statusEl = document.getElementById('status');
+      const btnSave = document.getElementById('btn-save');
+      const btnRevert = document.getElementById('btn-revert');
+      const btnReset = document.getElementById('btn-reset');
+
+      const canvas = document.getElementById('preview');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        statusEl.textContent = 'Canvas 2D not supported in this browser.';
+        statusEl.classList.add('error');
+        throw new Error('no 2d ctx');
+      }
+
+      const state = { ...initialParams };
+      const sourceImage = new Image();
+      sourceImage.crossOrigin = 'anonymous';
+
+      function setStatus(msg, isErr) {
+        statusEl.textContent = msg;
+        statusEl.classList.toggle('error', !!isErr);
+        statusEl.classList.toggle('ok', !isErr);
+      }
+
+      function computeFilters() {
+        const s = state;
+        const f = [];
+        // Exposure (-200..200) — divide by 100 = stops
+        const exposureStops = s.exposure / 100;
+        const expBrightness = Math.pow(2, exposureStops);  // 0.25..4
+        f.push('brightness(' + expBrightness.toFixed(3) + ')');
+        // Contrast (-100..100) — 0 = neutral, +/- = contrast change
+        f.push('contrast(' + (100 + s.contrast) + '%)');
+        // Saturation (-100..100)
+        f.push('saturate(' + (100 + s.saturation) + '%)');
+        // Brightness (-100..100) additive on top of exposure
+        f.push('brightness(' + (100 + s.brightness) + '%)');
+        // WB Temp (-100..100): warmer (positive) = sepia-ish; cooler = hue-rotate -ve
+        if (s.temp > 0) f.push('sepia(' + Math.min(100, s.temp * 40) + '%)');
+        else if (s.temp < 0) f.push('hue-rotate(' + Math.max(-180, s.temp * 30) + 'deg)');
+        // Tint (-100..100): green vs magenta
+        if (s.tint > 0) f.push('hue-rotate(' + Math.min(90, s.tint * 30) + 'deg)');
+        // Shadows/Highlights/Whites/Blacks: stacked contrast tweak (rough)
+        const shadowBoost = s.shadows / 100;       // negative darkens, positive lifts
+        const highlightCut = s.highlights / 100;   // negative darkens, positive lifts
+        if (s.shadows !== 0 || s.highlights !== 0) {
+          // Approximate via a contrast/brightness combo
+          const tones = (highlightCut - shadowBoost) * 0.2;
+          f.push('contrast(' + (100 + tones * 20) + '%)');
+          f.push('brightness(' + (100 + (shadowBoost + highlightCut) * 8) + '%)');
+        }
+        if (s.whites !== 0 || s.blacks !== 0) {
+          // Endpoints — push contrast + slight brightness
+          const ends = (s.whites - s.blacks) / 100;
+          f.push('contrast(' + (100 + ends * 12) + '%)');
+        }
+        return f.join(' ');
+      }
+
+      function fitCanvasToArea() {
+        const area = document.querySelector('.canvas-area');
+        const aw = area ? area.clientWidth : window.innerWidth;
+        const ah = area ? area.clientHeight : window.innerHeight;
+        if (!sourceImage.width) return;
+        const scale = Math.min(aw / sourceImage.width, ah / sourceImage.height, 1);
+        const dw = Math.max(1, Math.round(sourceImage.width * scale));
+        const dh = Math.max(1, Math.round(sourceImage.height * scale));
+        canvas.width = dw;
+        canvas.height = dh;
+        canvas.style.width = dw + 'px';
+        canvas.style.height = dh + 'px';
+      }
+
+      function draw() {
+        if (!sourceImage.complete || !sourceImage.naturalWidth) return;
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Apply crop via clip if set
+        if (state.crop) {
+          const c = state.crop;
+          const cx = c.x * canvas.width, cy = c.y * canvas.height;
+          const cw = c.w * canvas.width, ch = c.h * canvas.height;
+          // Dim outside-crop area
+          ctx.fillStyle = 'rgba(0,0,0,0.55)';
+          ctx.fillRect(0, 0, canvas.width, cy);                   // top
+          ctx.fillRect(0, cy, cx, ch);                            // left
+          ctx.fillRect(cx + cw, cy, canvas.width - cx - cw, ch); // right
+          ctx.fillRect(0, cy + ch, canvas.width, canvas.height); // bottom
+          // Draw image inside crop
+          ctx.beginPath();
+          ctx.rect(cx, cy, cw, ch);
+          ctx.clip();
+        }
+        // Apply CSS filter then draw the source image scaled to canvas
+        ctx.filter = computeFilters();
+        ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+        ctx.filter = 'none';
+        ctx.restore();
+        // Crop border
+        if (state.crop) {
+          const c = state.crop;
+          const cx = c.x * canvas.width, cy = c.y * canvas.height;
+          const cw = c.w * canvas.width, ch = c.h * canvas.height;
+          ctx.strokeStyle = '#fafafa';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(cx, cy, cw, ch);
+          // Resize handles (4 corners)
+          const h = 12;
+          ctx.fillStyle = '#fafafa';
+          [[cx,cy],[cx+cw,cy],[cx,cy+ch],[cx+cw,cy+ch]].forEach(([x,y]) => {
+            ctx.fillRect(x - h/2, y - h/2, h, h);
+          });
+        }
+      }
+
+      sourceImage.onload = () => {
+        fitCanvasToArea();
+        draw();
+        setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + '. Display ' + canvas.width + 'x' + canvas.height + '.');
+      };
+      sourceImage.onerror = () => setStatus('Image load failed.', true);
+      sourceImage.src = sourceUrl;
+
+      // ---- Sliders ----
+      document.querySelectorAll('.slider').forEach((wrap) => {
+        const key = wrap.dataset.key;
+        const input = wrap.querySelector('input');
+        const valEl = wrap.querySelector('.val');
+        input.value = state[key];
+        valEl.textContent = state[key];
+        input.addEventListener('input', () => {
+          const v = Number(input.value);
+          state[key] = v;
+          valEl.textContent = v;
+          draw();
+        });
+      });
+
+      function resetKeys(keys) {
+        keys.forEach((k) => { state[k] = 0; });
+        document.querySelectorAll('.slider').forEach((wrap) => {
+          if (keys.includes(wrap.dataset.key)) {
+            const input = wrap.querySelector('input');
+            const valEl = wrap.querySelector('.val');
+            input.value = 0;
+            valEl.textContent = '0';
+          }
+        });
+        draw();
+      }
+
+      btnReset.onclick = () => {
+        ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette'].forEach((k) => { state[k] = 0; });
+        document.querySelectorAll('.slider').forEach((wrap) => {
+          const input = wrap.querySelector('input');
+          const valEl = wrap.querySelector('.val');
+          input.value = 0;
+          valEl.textContent = '0';
+        });
+        state.crop = null;
+        draw();
+      };
+      document.getElementById('btn-reset-tone').onclick = () => resetKeys(['highlights','shadows','whites','blacks']);
+      document.getElementById('btn-reset-color').onclick = () => resetKeys(['saturation','temp','tint']);
+      document.getElementById('btn-reset-fx').onclick = () => { resetKeys(['sharpen','vignette']); };
+
+      // ---- Crop drag (works on the canvas) ----
+      let cropBox = null;       // { x, y, w, h } in canvas pixels
+      let dragMode = null;      // 'create' | 'move' | 'nw' | 'ne' | 'sw' | 'se' | null
+      let dragOffset = null;
+      function getPos(e) {
+        const r = canvas.getBoundingClientRect();
+        const cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+        const cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+        return { x: cx * (canvas.width / r.width), y: cy * (canvas.height / r.height) };
+      }
+      canvas.addEventListener('mousedown', onDown);
+      canvas.addEventListener('touchstart', onDown, { passive: false });
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('touchmove', onMove, { passive: false });
+      window.addEventListener('mouseup', onUp);
+      window.addEventListener('touchend', onUp);
+      function onDown(e) {
+        const p = getPos(e);
+        // Hit-test corners of existing cropBox
+        if (cropBox) {
+          const h = 14;
+          const corners = {
+            nw: [cropBox.x, cropBox.y],
+            ne: [cropBox.x + cropBox.w, cropBox.y],
+            sw: [cropBox.x, cropBox.y + cropBox.h],
+            se: [cropBox.x + cropBox.w, cropBox.y + cropBox.h],
+          };
+          for (const [name, [x, y]] of Object.entries(corners)) {
+            if (Math.abs(p.x - x) <= h && Math.abs(p.y - y) <= h) {
+              dragMode = name;
+              e.preventDefault();
+              return;
+            }
+          }
+          if (p.x >= cropBox.x && p.x <= cropBox.x + cropBox.w && p.y >= cropBox.y && p.y <= cropBox.y + cropBox.h) {
+            dragMode = 'move';
+            dragOffset = { dx: p.x - cropBox.x, dy: p.y - cropBox.y };
+            e.preventDefault();
+            return;
+          }
+        }
+        // Start a new crop
+        cropBox = { x: p.x, y: p.y, w: 1, h: 1 };
+        dragMode = 'se';
+        e.preventDefault();
+      }
+      function onMove(e) {
+        if (!dragMode) return;
+        e.preventDefault();
+        const p = getPos(e);
+        if (dragMode === 'create' || dragMode === 'se') {
+          cropBox.w = Math.max(2, p.x - cropBox.x);
+          cropBox.h = Math.max(2, p.y - cropBox.y);
+        } else if (dragMode === 'nw') {
+          cropBox.w += cropBox.x - p.x; cropBox.h += cropBox.y - p.y;
+          cropBox.x = p.x; cropBox.y = p.y;
+        } else if (dragMode === 'ne') {
+          cropBox.w = Math.max(2, p.x - cropBox.x);
+          cropBox.h += cropBox.y - p.y; cropBox.y = p.y;
+        } else if (dragMode === 'sw') {
+          cropBox.w += cropBox.x - p.x; cropBox.x = p.x;
+          cropBox.h = Math.max(2, p.y - cropBox.y);
+        } else if (dragMode === 'move' && dragOffset) {
+          cropBox.x = p.x - dragOffset.dx;
+          cropBox.y = p.y - dragOffset.dy;
+        }
+        clampCrop();
+        syncStateCrop();
+        draw();
+      }
+      function onUp() {
+        dragMode = null;
+        dragOffset = null;
+        if (cropBox && (cropBox.w < 8 || cropBox.h < 8)) {
+          cropBox = null;
+          state.crop = null;
+          draw();
+        }
+      }
+      function clampCrop() {
+        if (!cropBox) return;
+        cropBox.x = Math.max(0, Math.min(canvas.width - 2, cropBox.x));
+        cropBox.y = Math.max(0, Math.min(canvas.height - 2, cropBox.y));
+        cropBox.w = Math.max(2, Math.min(canvas.width - cropBox.x, cropBox.w));
+        cropBox.h = Math.max(2, Math.min(canvas.height - cropBox.y, cropBox.h));
+      }
+      function syncStateCrop() {
+        if (!cropBox) { state.crop = null; return; }
+        state.crop = {
+          x: cropBox.x / canvas.width,
+          y: cropBox.y / canvas.height,
+          w: cropBox.w / canvas.width,
+          h: cropBox.h / canvas.height,
         };
-        img.onerror = (e) => {
-          status.textContent = 'Image load FAILED';
-          status.classList.add('error');
-        };
-        img.src = sourceUrl;
-      })();
+      }
+
+      // Aspect ratio presets
+      let currentAspect = null;
+      document.querySelectorAll('[data-aspect]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const asp = btn.dataset.aspect;
+          document.querySelectorAll('[data-aspect]').forEach((b) => b.classList.remove('active'));
+          if (asp === 'free') { currentAspect = null; return; }
+          const [aw, ah] = asp.split(':').map(Number);
+          currentAspect = aw / ah;
+          btn.classList.add('active');
+          if (cropBox) {
+            const cx = cropBox.x + cropBox.w / 2;
+            const cy = cropBox.y + cropBox.h / 2;
+            const cur = cropBox.w / cropBox.h;
+            if (cur > currentAspect) {
+              const newW = cropBox.h * currentAspect;
+              cropBox.x = cx - newW / 2; cropBox.w = newW;
+            } else {
+              const newH = cropBox.w / currentAspect;
+              cropBox.y = cy - newH / 2; cropBox.h = newH;
+            }
+            clampCrop(); syncStateCrop(); draw();
+          }
+        });
+      });
+      document.getElementById('btn-clear-crop').onclick = () => {
+        cropBox = null; currentAspect = null;
+        document.querySelectorAll('[data-aspect]').forEach((b) => b.classList.remove('active'));
+        state.crop = null;
+        draw();
+      };
+
+      // Toast
+      const toastEl = document.getElementById('toast');
+      let toastT = null;
+      function toast(msg) {
+        toastEl.textContent = msg;
+        toastEl.classList.add('visible');
+        clearTimeout(toastT);
+        toastT = setTimeout(() => toastEl.classList.remove('visible'), 2000);
+      }
+
+      // ---- Save → server-side render via sharp ----
+      btnSave.onclick = async () => {
+        btnSave.disabled = true;
+        setStatus('Saving…');
+        try {
+          const res = await fetch('/api/images/' + imageId + '/edit', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ params: state, sourceUrl }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          setStatus('Saved #' + data.edit.id + ' at ' + new Date(data.edit.created_at + 'Z').toLocaleTimeString() + '.');
+          btnRevert.disabled = false;
+          toast('Edit saved.');
+        } catch (e) {
+          console.error(e);
+          setStatus('Save failed: ' + e.message, true);
+        } finally {
+          btnSave.disabled = false;
+        }
+      };
+
+      btnRevert.onclick = async () => {
+        if (!confirm('Discard all saved edits and revert to the original?')) return;
+        btnRevert.disabled = true;
+        try {
+          const res = await fetch('/api/images/' + imageId + '/edit', { method: 'DELETE' });
+          if (!res.ok) throw new Error(await res.text());
+          setStatus('Reverted to original.');
+          toast('Reverted.');
+        } catch (e) {
+          setStatus('Revert failed: ' + e.message, true);
+          btnRevert.disabled = false;
+        }
+      };
+
+      // Resize handling
+      window.addEventListener('resize', () => {
+        if (sourceImage.complete && sourceImage.naturalWidth) {
+          fitCanvasToArea();
+          draw();
+        }
+      });
+
+      setStatus('Editor ready.');
 </script>
   </body>
 </html>
