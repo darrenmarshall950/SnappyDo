@@ -19,11 +19,28 @@ import { adaptImage } from '../../../lib/image-adapter';
 import { getLatestImageEdit, listImageEdits } from '../../../lib/db-image-edits';
 import { imgproxyUrl } from '../../../lib/imgproxy';
 
+function parseExif(json: string | null | undefined): Record<string, any> {
+  if (!json) return {};
+  try { return JSON.parse(json); } catch { return {}; }
+}
+function formatExif(exif: Record<string, any>) {
+  return {
+    camera:      exif.camera      || '',
+    lens:        exif.lens        || '',
+    iso:         exif.iso         || '',
+    aperture:    exif.aperture    || '',
+    shutter:     exif.shutter     || '',
+    focalLength: exif.focalLength || '',
+    takenAt:     exif.takenAt     || '',
+  };
+}
 export const prerender = false;
 
 const id = Number(Astro.params.id);
 const img = Number.isFinite(id) ? getImage(id) : undefined;
 if (!img) return Astro.redirect('/admin', 302);
+
+const exif = formatExif(parseExif(img.exif_json));
 
 const latestEdit = getLatestImageEdit(id);
 const initialParams = latestEdit ? JSON.parse(latestEdit.params_json) : {
@@ -332,6 +349,24 @@ const sourceUrl = `/api/images/${img.id}/source`;
       }
       .status.error { color: #fca5a5; }
       .status.ok { color: #86efac; }
+
+      /* EXIF strip — directly below the status bar. Empty fields hidden. */
+      .exif {
+        padding: 0.45rem 1.25rem 0.6rem;
+        font-size: 0.6875rem;
+        background: var(--panel-2);
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.15rem 0.85rem;
+        line-height: 1.4;
+      }
+      .exif .exif__item { white-space: nowrap; }
+      .exif .exif__k { color: #888; margin-right: 0.25rem; }
+      .exif .exif__v { color: #fafafa; }
+      .exif .exif__camera { flex-basis: 100%; }
       .toast {
         position: fixed;
         bottom: 2rem;
@@ -545,6 +580,31 @@ const sourceUrl = `/api/images/${img.id}/source`;
         </section>
 
         <div class="status" id="status">Ready.</div>
+        {(exif.camera || exif.lens || exif.iso || exif.aperture || exif.shutter || exif.focalLength || exif.takenAt) && (
+          <div class="exif" title="Photo EXIF metadata">
+            {exif.camera && (
+              <span class="exif__item exif__camera"><span class="exif__k">Camera</span><span class="exif__v">{exif.camera}</span></span>
+            )}
+            {exif.lens && (
+              <span class="exif__item"><span class="exif__k">Lens</span><span class="exif__v">{exif.lens}</span></span>
+            )}
+            {exif.iso && (
+              <span class="exif__item"><span class="exif__k">ISO</span><span class="exif__v">{exif.iso}</span></span>
+            )}
+            {exif.aperture && (
+              <span class="exif__item"><span class="exif__k">Aperture</span><span class="exif__v">{exif.aperture}</span></span>
+            )}
+            {exif.shutter && (
+              <span class="exif__item"><span class="exif__k">Shutter</span><span class="exif__v">{exif.shutter}</span></span>
+            )}
+            {exif.focalLength && (
+              <span class="exif__item"><span class="exif__k">Focal</span><span class="exif__v">{exif.focalLength}</span></span>
+            )}
+            {exif.takenAt && (
+              <span class="exif__item"><span class="exif__k">Taken</span><span class="exif__v">{exif.takenAt.replace('T', ' ').replace(/\..*$/, '').replace('Z', ' UTC')}</span></span>
+            )}
+          </div>
+        )}
       </aside>
     </div>
 
