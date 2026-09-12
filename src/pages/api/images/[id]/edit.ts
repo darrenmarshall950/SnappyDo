@@ -121,6 +121,36 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
     }
   }
 
+  const sharpen = Number(params.sharpen) || 0;       // 0..100
+  if (sharpen > 0) {
+    // 0 → no-op, 50 → sigma=1 (light), 100 → sigma=3 (strong)
+    const sigma = Math.max(0.5, (sharpen / 100) * 3);
+    pipeline = pipeline.sharpen({ sigma, m1: 1, m2: 1 });
+  }
+
+  const vignette = Number(params.vignette) || 0;     // 0..100
+  if (vignette > 0) {
+    // Build a radial SVG vignette mask and composite via `multiply`.
+    // amount 0..1 — strength of darkening at the corners. amount > 0 darkens.
+    const amount = Math.max(0.05, Math.min(0.95, vignette / 100));
+    const cx = 50, cy = 50;
+    const stopInner = 30 - amount * 15;   // brighter at centre
+    const stopOuter = 95;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 100 100" preserveAspectRatio="none">
+      <defs>
+        <radialGradient id="g" cx="${cx}%" cy="${cy}%" r="60%">
+          <stop offset="0%" stop-color="white" stop-opacity="0"/>
+          <stop offset="${stopInner}%" stop-color="white" stop-opacity="0"/>
+          <stop offset="${stopOuter}%" stop-color="black" stop-opacity="${(0.25 + amount * 0.55).toFixed(3)}"/>
+          <stop offset="100%" stop-color="black" stop-opacity="${(0.5 + amount * 0.4).toFixed(3)}"/>
+        </radialGradient>
+      </defs>
+      <rect width="100" height="100" fill="url(#g)"/>
+    </svg>`;
+    const vigBuf = Buffer.from(svg);
+    pipeline = pipeline.composite([{ input: vigBuf, blend: 'multiply' }]);
+  }
+
   const buf = await pipeline.jpeg({ quality: 95, mozjpeg: true }).toBuffer();
   return { buf, appliedCrop };
 }

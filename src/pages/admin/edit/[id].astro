@@ -258,6 +258,35 @@ const sourceUrl = `/api/images/${img.id}/source`;
         color: var(--accent-fg);
         border-color: var(--accent-bg);
       }
+      .btn--ghost {
+        background: transparent;
+        color: var(--accent-fg);
+        border-color: var(--border);
+      }
+      .btn--ghost:hover { background: var(--bg-hover); border-color: var(--accent); }
+      .btn--ghost.active {
+        background: var(--accent-bg);
+        color: var(--accent-fg);
+        border-color: var(--accent-bg);
+      }
+      .compare-indicator {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.7);
+        color: #fafafa;
+        padding: 0.5rem 1rem;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 0.875rem;
+        letter-spacing: 0.1em;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.12s ease;
+        z-index: 1000;
+      }
+      .compare-indicator.visible { opacity: 1; }
       .status {
         padding: 0.5rem 1.25rem;
         font-size: 0.75rem;
@@ -370,6 +399,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
         </div>
         <div class="top-actions">
           <button class="btn" id="btn-reset">Reset</button>
+          <button class="btn btn--ghost" id="btn-compare" type="button" aria-label="Hold to compare original">⏷ Compare</button>
           <button class="btn btn--danger" id="btn-revert" disabled={!latestEdit}>Revert to original</button>
           <button class="btn btn--primary" id="btn-save">Save edit</button>
         </div>
@@ -477,6 +507,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
     </div>
 
     <div class="toast" id="toast"></div>
+    <div id="compare-indicator" class="compare-indicator">ORIGINAL</div>
 
     <script type="module" define:vars={{
       imageId: img.id,
@@ -566,6 +597,12 @@ const sourceUrl = `/api/images/${img.id}/source`;
         if (!sourceImage.complete || !sourceImage.naturalWidth) return;
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Compare mode: show original, no crop mask, no filter
+        if (comparing) {
+          ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+          ctx.restore();
+          return;
+        }
         // Apply crop via clip if set
         if (state.crop) {
           const c = state.crop;
@@ -753,15 +790,56 @@ const sourceUrl = `/api/images/${img.id}/source`;
 
       // Aspect ratio presets
       let currentAspect = null;
+      function setAspectPreset(ratio) {
+        // ratio = w/h; null = free
+        document.querySelectorAll('[data-aspect]').forEach((b) => b.classList.remove('active'));
+        const label = ratio === null ? 'free' : (function () {
+          // pick the closest standard button label to highlight
+          const map = { '1': '1:1', '4/3': '4:3', '3/2': '3:2', '16/9': '16:9' };
+          let best = null, bestDiff = Infinity;
+          for (const [r, lbl] of Object.entries(map)) {
+            const diff = Math.abs(Number(r) - ratio);
+            if (diff < bestDiff) { bestDiff = diff; best = lbl; }
+          }
+          return bestDiff < 0.02 ? best : null;
+        })();
+        if (label) {
+          const btn = document.querySelector('[data-aspect="' + label + '"]');
+          if (btn) btn.classList.add('active');
+        }
+        currentAspect = ratio;
+      }
+      function makeCropAtAspect() {
+        // Centre a crop as large as possible at the current aspect ratio
+        const imgR = canvas.width / canvas.height;
+        const wByH = currentAspect || imgR;
+        let w, h;
+        if (imgR > wByH) {
+          w = Math.round(canvas.height * wByH);
+          h = canvas.height;
+        } else {
+          w = canvas.width;
+          h = Math.round(canvas.width / wByH);
+        }
+        cropBox = {
+          x: Math.round((canvas.width - w) / 2),
+          y: Math.round((canvas.height - h) / 2),
+          w: w, h: h,
+        };
+        syncStateCrop();
+      }
       document.querySelectorAll('[data-aspect]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const asp = btn.dataset.aspect;
-          document.querySelectorAll('[data-aspect]').forEach((b) => b.classList.remove('active'));
-          if (asp === 'free') { currentAspect = null; return; }
+          if (asp === 'free') { setAspectPreset(null); return; }
           const [aw, ah] = asp.split(':').map(Number);
-          currentAspect = aw / ah;
-          btn.classList.add('active');
-          if (cropBox) {
+          if (!aw || !ah) return;
+          setAspectPreset(aw / ah);
+          if (!cropBox) {
+            // No existing crop — create one centred at this aspect
+            makeCropAtAspect();
+          } else {
+            // Resize existing crop to the new aspect
             const cx = cropBox.x + cropBox.w / 2;
             const cy = cropBox.y + cropBox.h / 2;
             const cur = cropBox.w / cropBox.h;
@@ -772,8 +850,8 @@ const sourceUrl = `/api/images/${img.id}/source`;
               const newH = cropBox.w / currentAspect;
               cropBox.y = cy - newH / 2; cropBox.h = newH;
             }
-            clampCrop(); syncStateCrop(); draw();
           }
+          clampCrop(); syncStateCrop(); draw();
         });
       });
       document.getElementById('btn-clear-crop').onclick = () => {
@@ -782,6 +860,28 @@ const sourceUrl = `/api/images/${img.id}/source`;
         state.crop = null;
         draw();
       };
+
+      // ---- Compare: hold button (or SPACE) to see the ORIGINAL ----
+      // "Lightroom before/after" pattern. Drag = interactive, click = static.
+      const btnCompare = document.getElementById('btn-compare');
+      const indicatorEl = document.getElementById('compare-indicator');
+      let comparing = false;
+      function setComparing(v) {
+        if (comparing === v) return;
+        comparing = v;
+        indicatorEl.classList.toggle('visible', v);
+        btnCompare.classList.toggle('active', v);
+        draw();
+      }
+      // mouse / touch — press to compare, release to return
+      btnCompare.addEventListener('mousedown', () => setComparing(true));
+      btnCompare.addEventListener('touchstart', (e) => { setComparing(true); e.preventDefault(); }, { passive: false });
+      const releaseCompare = () => setComparing(false);
+      window.addEventListener('mouseup', releaseCompare);
+      window.addEventListener('touchend', releaseCompare);
+      // Also SPACE while focused (keyboard shortcut)
+      btnCompare.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setComparing(true); } });
+      btnCompare.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setComparing(false); } });
 
       // Toast
       const toastEl = document.getElementById('toast');
