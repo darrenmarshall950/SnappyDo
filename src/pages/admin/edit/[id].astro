@@ -286,6 +286,72 @@ const sourceUrl = imgproxyUrl(img.path, { format: 'jpg', quality: 95 });
         font-size: 0.8125rem;
       }
       a.back-link:hover { color: var(--text); }
+
+      /* ============================================================
+         MOBILE (≤768px) — stack vertically; let the page scroll;
+         give the canvas real room instead of squeezing it.
+         ============================================================ */
+      @media (max-width: 768px) {
+        html, body {
+          overflow: auto;          /* allow scroll on mobile */
+          height: auto;            /* drop the 100vh trap */
+        }
+        .editor {
+          grid-template-columns: 1fr;
+          grid-template-rows: auto auto 1fr;
+          grid-template-areas:
+            "top"
+            "panel"
+            "canvas";
+          height: auto;            /* page grows to fit content */
+        }
+        .top {
+          flex-wrap: wrap;
+          padding: 0.5rem 0.75rem;
+          gap: 0.5rem;
+        }
+        .top-title h1 {
+          max-width: 60vw;
+          font-size: 0.8125rem;
+        }
+        .top-title .meta {
+          display: none;           /* 2066×3672 etc. takes too much room */
+        }
+        .top-actions {
+          width: 100%;
+          justify-content: flex-end;
+        }
+        .top-actions .btn {
+          padding: 0.4rem 0.6rem;
+          font-size: 0.75rem;
+        }
+        /* Reorder: top → canvas → panel. Above rule stacks them
+           top/panel/canvas. Use order to put canvas first after top. */
+        .top { order: 1; }
+        .canvas-area { order: 2; }
+        .panel { order: 3; }
+        .canvas-area {
+          min-height: 60vh;        /* canvas gets real estate */
+          border-bottom: 1px solid var(--border);
+        }
+        canvas#preview {
+          max-height: 60vh;        /* override the calc(100vh-56px) for mobile */
+          width: 100%;
+          height: auto;
+        }
+        .panel {
+          border-left: none;
+          border-top: 1px solid var(--border);
+          max-height: none;
+        }
+        .panel-section {
+          padding: 0.75rem 1rem;
+        }
+      }
+
+      @media (max-width: 420px) {
+        .top-actions .btn-label { display: none; }
+      }
     </style>
   </head>
   <body>
