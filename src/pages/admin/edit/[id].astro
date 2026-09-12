@@ -683,13 +683,25 @@ const sourceUrl = `/api/images/${img.id}/source`;
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-        // Set canvas DRAWING buffer to native image size — WebGL renders at
-        // full resolution (great for Save). CSS handles the display size:
-        //   max-width: 100%; max-height: calc(100vh - 56px); object-fit: contain
-        // so the canvas is scaled down to fit the viewport on either layout.
+
+        // Display size: compute aspect-correct fit for the viewport. We compute
+        // it from .canvas-area's actual client size so mobile (no panel
+        // subtraction) and desktop both work.
+        const area = document.querySelector('.canvas-area');
+        const aw = area ? area.clientWidth : window.innerWidth;
+        const ah = area ? area.clientHeight : window.innerHeight;
+        const scale = Math.min(aw / img.width, ah / img.height, 1);
+        const dw = Math.max(1, Math.round(img.width * scale));
+        const dh = Math.max(1, Math.round(img.height * scale));
+
+        // Drawing buffer: native image size for full-res WebGL render (used by Save).
         canvas.width = img.width;
         canvas.height = img.height;
-        // No style.width/height overrides — let CSS take over.
+
+        // Display size: explicit CSS dimensions so the browser doesn't collapse
+        // the element to 0 or stretch it.
+        canvas.style.width = dw + 'px';
+        canvas.style.height = dh + 'px';
       }
 
       function draw() {
@@ -1085,9 +1097,10 @@ const sourceUrl = `/api/images/${img.id}/source`;
           renderOverlay();
         }
         draw();
-        statusEl.textContent = hasExistingEdit
-          ? 'Loaded with saved edit.'
-          : 'Loaded ' + sourceImage.width + 'x' + sourceImage.height + '.';
+        statusEl.textContent =
+          (hasExistingEdit ? 'Loaded with saved edit. ' : 'Loaded ') +
+          sourceImage.width + 'x' + sourceImage.height + '. ' +
+          'Display ' + canvas.style.width + ' × ' + canvas.style.height + '.';
       };
       sourceImage.onerror = () => {
         statusEl.textContent = 'Failed to load source image.';
