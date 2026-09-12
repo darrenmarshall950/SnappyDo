@@ -288,6 +288,10 @@ const sourceUrl = `/api/images/${img.id}/source`;
         color: var(--accent-fg);
       }
       .btn-compare-pill.active { background: var(--accent-bg); color: white; }
+      .compare-icon {
+        display: block;
+        flex-shrink: 0;
+      }
       .kbd-key {
         display: inline-block;
         padding: 0.1rem 0.5rem;
@@ -430,7 +434,13 @@ const sourceUrl = `/api/images/${img.id}/source`;
         </div>
         <div class="top-actions">
           <button class="btn" id="btn-reset">Reset</button>
-          <button class="btn btn--ghost btn-compare-pill" id="btn-compare" type="button" aria-label="Hold to compare original" title="Hold to compare original (or press SPACE)" aria-pressed="false"><span class="kbd-key">Hold</span> See original</button>
+          <button class="btn btn--ghost btn-compare-pill" id="btn-compare" type="button" aria-label="Hold to compare original" title="Hold to compare original (or press SPACE)" aria-pressed="false">
+            <svg class="compare-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <rect x="2" y="4" width="9" height="16" rx="1" fill="currentColor" opacity="0.55"/>
+              <rect x="13" y="4" width="9" height="16" rx="1" fill="currentColor"/>
+              <line x1="12" y1="2" x2="12" y2="22" stroke="currentColor" stroke-width="1.25" opacity="0.85"/>
+            </svg>
+          </button>
           <button class="btn btn--danger" id="btn-revert" disabled={!latestEdit}>Revert to original</button>
           <button class="btn btn--primary" id="btn-save">Save edit</button>
         </div>
