@@ -1092,7 +1092,12 @@ const sourceUrl = `/api/images/${img.id}/source`;
         statusEl.textContent = 'Failed to load source image.';
         statusEl.classList.add('error');
       };
-      sourceImage.src = sourceUrl;
+      statusEl.textContent = 'Loading source…';
+      try { sourceImage.src = sourceUrl; }
+      catch (e) {
+        statusEl.textContent = 'Could not start image load: ' + e.message;
+        statusEl.classList.add('error');
+      }
 
       window.addEventListener('resize', () => {
         if (sourceImage.width) {
@@ -1109,6 +1114,22 @@ const sourceUrl = `/api/images/${img.id}/source`;
           draw();
         }
       });
-    </script>
+    
+      // Global error + console hook — surfaces anything that goes wrong in a
+      // visible place so the admin can tell us what failed.
+      const _setStatus = (msg, isErr) => {
+        try {
+          statusEl.textContent = msg;
+          statusEl.classList.toggle('error', !!isErr);
+        } catch {}
+      };
+      window.addEventListener('error', (ev) => {
+        _setStatus('JS error: ' + (ev.message || ev.error?.message || 'unknown'), true);
+      });
+      window.addEventListener('unhandledrejection', (ev) => {
+        _setStatus('Promise error: ' + (ev.reason?.message || ev.reason || 'unknown'), true);
+      });
+
+</script>
   </body>
 </html>
