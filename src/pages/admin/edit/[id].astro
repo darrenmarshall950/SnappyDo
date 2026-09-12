@@ -49,14 +49,6 @@ const sourceUrl = `/api/images/${img.id}/source`;
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Edit — {img.original_name}</title>
-    <svg width="0" height="0" style="position: absolute; pointer-events: none" aria-hidden="true">
-      <defs>
-        <filter id="snappydo-sharpen" x="0%" y="0%" width="100%" height="100%">
-          <feConvolveMatrix id="snappydo-sharpen-kernel" order="3" preserveAlpha="true"
-            kernelMatrix="0 0 0  0 1 0  0 0 0" />
-        </filter>
-      </defs>
-    </svg>
     <style>
       :root {
         --bg: #0a0a0a;
@@ -616,12 +608,74 @@ const sourceUrl = `/api/images/${img.id}/source`;
           const ends = (s.whites - s.blacks) / 100;
           f.push('contrast(' + (100 + ends * 12) + '%)');
         }
-        // Sharpen: chain the inline SVG filter (kernel rebuilt by updateSharpenKernel)
-        if (s.sharpen > 0) {
-          f.push('url(#snappydo-sharpen)');
-        }
+        // Sharpen is now handled OUTSIDE the CSS filter chain via Canvas 2D
+        // unsharp-mask in getSharpenedSource(). See below.
         return f.join(' ');
       }
+
+      // ---- Unsharp mask via Canvas 2D ----
+      // The previous SVG feConvolveMatrix approach broke (the rendered result
+      // was going pure black). This is the textbook unsharp-mask recipe:
+      //   1. Render source to off-screen canvas
+      //   2. Apply Gaussian blur to a copy -> blurredData
+      //   3. For each pixel: out = clamp( src + (src - blurred) * amount )
+      // amount is 0..1 derived from slider 0..100. At amount=0 we just
+      // return sourceImage (no extra work). Result: brightening of edges,
+      // never pure-black. Cached so we only re-blur when amount changes.
+      const _sharpenCanvas = document.createElement('canvas');
+      const _sharpenCtx = _sharpenCanvas.getContext('2d');
+      let _sharpenCacheKey = -1;
+      let _sharpenCacheCanvas = null;
+
+      function getSharpenedSource(amount) {
+        if (!sourceImage.complete || !sourceImage.naturalWidth) return sourceImage;
+        if (amount <= 0) return sourceImage;
+        if (amount === _sharpenCacheKey && _sharpenCacheCanvas) return _sharpenCacheCanvas;
+
+        const w = canvas.width;
+        const h = canvas.height;
+        _sharpenCanvas.width = w;
+        _sharpenCanvas.height = h;
+
+        // 1. Draw sharp source
+        _sharpenCtx.clearRect(0, 0, w, h);
+        _sharpenCtx.drawImage(sourceImage, 0, 0, w, h);
+        const sharpImg = _sharpenCtx.getImageData(0, 0, w, h);
+
+        // 2. Draw blurred source (CSS filter blur on canvas2d context)
+        _sharpenCtx.filter = 'blur(1.2px)';
+        _sharpenCtx.drawImage(sourceImage, 0, 0, w, h);
+        _sharpenCtx.filter = 'none';
+        const blurImg = _sharpenCtx.getImageData(0, 0, w, h);
+
+        // 3. Unsharp mask: out = src + (src - blur) * amount
+        const k = amount / 100;  // 0..1
+        const sd = sharpImg.data;
+        const bd = blurImg.data;
+        for (let i = 0; i < sd.length; i += 4) {
+          const dr = sd[i]   - bd[i];
+          const dg = sd[i+1] - bd[i+1];
+          const db = sd[i+2] - bd[i+2];
+          let r = sd[i]   + dr * k;
+          let g = sd[i+1] + dg * k;
+          let b = sd[i+2] + db * k;
+          if (r < 0) r = 0; else if (r > 255) r = 255;
+          if (g < 0) g = 0; else if (g > 255) g = 255;
+          if (b < 0) b = 0; else if (b > 255) b = 255;
+          sd[i] = r; sd[i+1] = g; sd[i+2] = b;
+        }
+        _sharpenCtx.putImageData(sharpImg, 0, 0);
+        _sharpenCacheKey = amount;
+        _sharpenCacheCanvas = _sharpenCanvas;
+        return _sharpenCanvas;
+      }
+
+      // Invalidate sharpen cache when source image changes
+      const _origSourceAssign = sourceImage.src;
+      sourceImage.addEventListener('load', () => {
+        _sharpenCacheKey = -1;
+        _sharpenCacheCanvas = null;
+      });
 
       // Apply vignette overlay opacity (separate from canvas filter — vignette is a DOM overlay)
       const vignetteEl = document.getElementById('vignette-overlay');
@@ -634,26 +688,8 @@ const sourceUrl = `/api/images/${img.id}/source`;
       }
       window.applyVignetteOverlay = applyVignetteOverlay;
 
-      // ---- Sharpen kernel: rebuilds the SVG feConvolveMatrix kernel from
-      // the slider value. The previous kernel was too aggressive — for an
-      // edge where I=200, ngh=50 the output was 5*200 - 4*50 = 800, clamped
-      // to white; for the inverse, clamped to black. Whole image went black.
-      // New kernel: c - 4k = 1 (preserves brightness). At slider=0 → identity
-      // (1,0,0,0,1,0,0,0,1); at slider=100 → mild sharpen (0,-.5,0;-.5,3,-.5;0,-.5,0).
-      const sharpenKernelEl = document.getElementById('snappydo-sharpen-kernel');
-      function updateSharpenKernel(value) {
-        const v = Math.max(0, Math.min(100, Number(value) || 0)) / 100; // 0..1
-        const k = v * 0.5;        // edge contrast amount (0..0.5)
-        const c = 1 + 4 * k;      // centre weight (1..3) — keeps sum = 1
-        // Identity at v=0 (k=0, c=1); progressively sharper at higher v.
-        const m = (
-          '0 ' + (-k).toFixed(3) + ' 0 ' +
-          (-k).toFixed(3) + ' ' + c.toFixed(3) + ' ' + (-k).toFixed(3) + ' ' +
-          '0 ' + (-k).toFixed(3) + ' 0'
-        );
-        sharpenKernelEl.setAttribute('kernelMatrix', m);
-      }
-      window.updateSharpenKernel = updateSharpenKernel;
+      // Sharpen is now handled via getSharpenedSource() below — unsharp-mask
+      // in plain Canvas 2D pixel ops, no SVG filter dependency.
 
       function fitCanvasToArea() {
         const area = document.querySelector('.canvas-area');
@@ -695,9 +731,10 @@ const sourceUrl = `/api/images/${img.id}/source`;
           ctx.rect(cx, cy, cw, ch);
           ctx.clip();
         }
-        // Apply CSS filter then draw the source image scaled to canvas
+        // Apply CSS filter then draw the sharpened source image scaled to canvas
         ctx.filter = computeFilters();
-        ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+        const drawSource = (state.sharpen > 0) ? getSharpenedSource(state.sharpen) : sourceImage;
+        ctx.drawImage(drawSource, 0, 0, canvas.width, canvas.height);
         ctx.filter = 'none';
         ctx.restore();
         // Crop border
@@ -719,8 +756,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
 
       sourceImage.onload = () => {
         fitCanvasToArea();
-        // Pre-build the sharpen kernel for the loaded initialParams
-        updateSharpenKernel(state.sharpen);
+        _sharpenCacheKey = -1; // invalidate any stale sharpen cache
         applyVignetteOverlay();
         draw();
         setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + '. Display ' + canvas.width + 'x' + canvas.height + '.');
@@ -739,8 +775,12 @@ const sourceUrl = `/api/images/${img.id}/source`;
           const v = Number(input.value);
           state[key] = v;
           valEl.textContent = v;
-          if (key === 'sharpen') updateSharpenKernel(v);
+          if (key === 'sharpen') {
+            _sharpenCacheKey = -1; // force re-blur next draw
+            if (v > 0) getSharpenedSource(v);
+          }
           applyVignetteOverlay();
+          draw();
           draw();
         });
       });
