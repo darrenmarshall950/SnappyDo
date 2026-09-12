@@ -630,16 +630,42 @@ const sourceUrl = `/api/images/${img.id}/source`;
       function buildProgram() {
         const vs = compile(gl.VERTEX_SHADER, VERT);
         const fs = compile(gl.FRAGMENT_SHADER, FRAG);
+        // Surface shader compile errors
+        if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
+          statusEl.textContent = 'VS compile failed: ' + gl.getShaderInfoLog(vs);
+          statusEl.classList.add('error');
+        }
+        if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+          statusEl.textContent = 'FS compile failed: ' + gl.getShaderInfoLog(fs);
+          statusEl.classList.add('error');
+        }
         program = gl.createProgram();
         gl.attachShader(program, vs);
         gl.attachShader(program, fs);
         gl.linkProgram(program);
         if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-          console.error('Link error:', gl.getProgramInfoLog(program));
+          statusEl.textContent = 'Program link failed: ' + gl.getProgramInfoLog(program);
+          statusEl.classList.add('error');
         }
       }
       buildProgram();
       gl.useProgram(program);
+
+      // WebGL context loss handlers — common on mobile with large canvases
+      canvas.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        statusEl.textContent = 'WebGL context lost. Please refresh the page.';
+        statusEl.classList.add('error');
+      });
+      canvas.addEventListener('webglcontextrestored', () => {
+        statusEl.textContent = 'WebGL context restored. Reloading…';
+        buildProgram();
+        gl.useProgram(program);
+        if (sourceImage.complete && sourceImage.naturalWidth) {
+          uploadTexture(sourceImage);
+          draw();
+        }
+      });
 
       // Fullscreen quad
       const buf = gl.createBuffer();
@@ -683,6 +709,11 @@ const sourceUrl = `/api/images/${img.id}/source`;
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        const terr = gl.getError();
+        if (terr !== gl.NO_ERROR) {
+          statusEl.textContent = 'texImage2D failed (err ' + terr + ')';
+          statusEl.classList.add('error');
+        }
 
         // Display size: compute aspect-correct fit for the viewport. We compute
         // it from .canvas-area's actual client size so mobile (no panel
@@ -728,7 +759,18 @@ const sourceUrl = `/api/images/${img.id}/source`;
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.uniform1i(U.tex, 0);
 
+        // Diagnostic: clear canvas to dark gray (NOT black) so we can tell if
+        // drawArrays is even running. If the canvas is dark gray, draw() ran
+        // but the shader output is black. If it's black, drawArrays never ran.
+        gl.clearColor(0.15, 0.15, 0.15, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
         gl.drawArrays(gl.TRIANGLES, 0, 6);
+        const derr = gl.getError();
+        if (derr !== gl.NO_ERROR) {
+          statusEl.textContent = 'drawArrays error ' + derr;
+          statusEl.classList.add('error');
+        }
       }
 
       // ---- Slider wiring ----
