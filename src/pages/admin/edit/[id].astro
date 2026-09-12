@@ -170,6 +170,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
         max-height: calc(100vh - 56px);
         object-fit: contain;
         cursor: crosshair;
+        display: block;
       }
       .canvas-hint {
         position: absolute;
@@ -340,7 +341,8 @@ const sourceUrl = `/api/images/${img.id}/source`;
         }
         canvas#preview {
           max-height: 60vh;        /* override the calc(100vh-56px) for mobile */
-          width: 100%;
+          max-width: 100%;
+          width: auto;
           height: auto;
         }
         .panel {
@@ -681,16 +683,13 @@ const sourceUrl = `/api/images/${img.id}/source`;
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-        // Size canvas to display size, clamped to viewport
-        const maxW = window.innerWidth - 360; // account for panel
-        const maxH = window.innerHeight - 56; // account for top bar
-        const scale = Math.min(maxW / img.width, maxH / img.height, 1);
-        const cw = Math.max(1, Math.round(img.width * scale));
-        const ch = Math.max(1, Math.round(img.height * scale));
-        canvas.width = cw;
-        canvas.height = ch;
-        canvas.style.width = cw + 'px';
-        canvas.style.height = ch + 'px';
+        // Set canvas DRAWING buffer to native image size — WebGL renders at
+        // full resolution (great for Save). CSS handles the display size:
+        //   max-width: 100%; max-height: calc(100vh - 56px); object-fit: contain
+        // so the canvas is scaled down to fit the viewport on either layout.
+        canvas.width = img.width;
+        canvas.height = img.height;
+        // No style.width/height overrides — let CSS take over.
       }
 
       function draw() {
