@@ -6,6 +6,12 @@ export default defineConfig({
   adapter: node({ mode: 'standalone' }),
   server: { host: '0.0.0.0', port: 3000 },
   vite: {
-    ssr: { noExternal: ['framer-motion'] },
+    ssr: {
+      noExternal: ['framer-motion'],
+      external: ['better-sqlite3', '@node-rs/bcrypt', 'sharp', 'busboy', 'exifr'],
+    },
+    optimizeDeps: {
+      exclude: ['better-sqlite3', '@node-rs/bcrypt', 'sharp'],
+    },
   },
 });

@@ -1,0 +1,613 @@
+---
+/**
+ * Gallery edit page — change title, description, template, password, or delete.
+ *
+ * Protected by middleware. POSTs to /admin/api/galleries/:id.
+ */
+import { getGalleryById, listImagesForGallery, deleteGallery } from '../../../lib/db';
+import { latestEditFor } from '../../../lib/db-image-edits';
+import { adaptImage } from '../../../lib/image-adapter';
+import { templateMeta, VALID_TEMPLATES } from '../../../lib/gallery-schemas';
+
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+const g = Number.isFinite(id) ? getGalleryById(id) : undefined;
+
+if (!g) return Astro.redirect('/admin', 302);
+
+const error = Astro.url.searchParams.get('error');
+const saved = Astro.url.searchParams.get('saved') === '1';
+const images = listImagesForGallery(g.id);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{g.title} — Edit</title>
+  </head>
+  <body class="admin-body">
+    <header class="admin-header">
+      <a href="/admin" class="admin-header__brand">SnappyDo</a>
+      <nav class="admin-header__nav">
+        <a href={`/g/${g.slug}`} class="admin-link">View gallery →</a>
+        <span class="admin-header__user">Signed in as <strong>{Astro.locals.admin?.user}</strong></span>
+      </nav>
+    </header>
+
+    <main class="admin-main">
+      <nav class="breadcrumbs">
+        <a href="/admin">← All galleries</a>
+      </nav>
+
+      <header class="edit-head">
+        <h1>{g.title}</h1>
+        <p><code>/g/{g.slug}</code> · {images.length} photos</p>
+      </header>
+
+      {saved && <p class="edit-flash edit-flash--ok">Saved.</p>}
+      {error && <p class="edit-flash edit-flash--err" role="alert">Error: {error}</p>}
+
+      <section class="edit-grid">
+        <form method="POST" action={`/admin/api/galleries/${g.id}`} class="edit-form">
+          <h2 class="edit-h2">Settings</h2>
+
+          <label class="edit-field">
+            <span>Title</span>
+            <input type="text" name="title" value={g.title} required />
+          </label>
+
+          <label class="edit-field">
+            <span>Description</span>
+            <textarea name="description" rows="3">{g.description}</textarea>
+          </label>
+
+          <label class="edit-field">
+            <span>Slug</span>
+            <input type="text" name="slug" value={g.slug} pattern="[a-z0-9-]+" required />
+            <small>Lowercase letters, numbers, hyphens. Used in the URL: /g/{g.slug}</small>
+          </label>
+
+          <label class="edit-field">
+            <span>Default template</span>
+            <select name="template_id">
+              {VALID_TEMPLATES.map((tid) => (
+                <option value={tid} selected={tid === g.template_id}>
+                  {templateMeta[tid].name} — {templateMeta[tid].description}
+                </option>
+              ))}
+            </select>
+            <small>Visitors can still preview other templates via ?t=…</small>
+          </label>
+
+          <fieldset class="edit-field">
+            <legend>Password protection</legend>
+            {g.password_hash && (
+              <p class="edit-existing">
+                Gallery is currently <strong>🔒 password protected</strong>.
+              </p>
+            )}
+            <label class="edit-field">
+              <span>{g.password_hash ? 'New password (leave blank to keep current)' : 'Set a password (optional)'}</span>
+              <input type="password" name="password" autocomplete="new-password" placeholder={g.password_hash ? '••••••••' : 'Optional'} />
+              <small>Visitors will need this password to view photos. Leave blank to keep public.</small>
+            </label>
+            {g.password_hash && (
+              <label class="edit-field__inline">
+                <input type="checkbox" name="remove_password" value="1" />
+                <span>Remove password protection</span>
+              </label>
+            )}
+          </fieldset>
+
+          <div class="edit-actions">
+            <button type="submit" class="admin-btn admin-btn--primary">Save changes</button>
+            <a href={`/upload?gallery=${g.id}`} class="admin-btn admin-btn--ghost">Upload photos →</a>
+          </div>
+        </form>
+
+        <aside class="edit-aside">
+          <h2 class="edit-h2">Stats</h2>
+          <dl class="edit-stats">
+            <dt>Photos</dt><dd>{images.length}</dd>
+            <dt>Created</dt><dd>{g.created_at}</dd>
+            <dt>Template</dt><dd><code>{g.template_id}</code></dd>
+            <dt>Config</dt><dd><code>{g.template_config_json}</code></dd>
+          </dl>
+
+          <h2 class="edit-h2" style="margin-top:2rem;">Danger zone</h2>
+          <form method="POST" action={`/admin/api/galleries/${g.id}/delete`} onsubmit="return confirm('Delete this gallery and ALL its photos? This cannot be undone.');">
+            <button type="submit" class="admin-btn admin-btn--danger">Delete gallery</button>
+          </form>
+        </aside>
+      </section>
+          <!-- ===== Image grid + bulk delete + per-image edit ===== -->
+      {images.length > 0 && (
+        <section class="image-grid-section">
+          <header class="image-grid-head">
+            <h2 class="edit-h2">
+              Photos
+              <span class="image-grid-count">{images.length}</span>
+            </h2>
+            <div class="image-grid-actions">
+              <label class="image-grid-select-all">
+                <input type="checkbox" id="check-all" />
+                <span>Select all</span>
+              </label>
+              <button type="button" class="admin-btn admin-btn--danger" id="btn-bulk-delete" disabled>
+                Delete selected (<span id="selected-count">0</span>)
+              </button>
+            </div>
+          </header>
+
+          <div class="image-grid" id="image-grid">
+            {images.map((image) => (
+              <div class="image-card" data-image-id={image.id}>
+                <label class="image-card__select">
+                  <input type="checkbox" class="image-check" value={image.id} />
+                </label>
+                <a class="image-card__thumb" href={`/admin/edit/${image.id}`} title="Edit this image">
+                  <img
+                    src={adaptImage(image).thumb}
+                    srcset={adaptImage(image).srcset}
+                    sizes="(max-width: 768px) 50vw, 240px"
+                    alt={image.original_name}
+                    loading="lazy"
+                  />
+                  {latestEditFor(image.id) && (
+                    <span class="image-card__edited-badge" title="This image has a saved edit">EDITED</span>
+                  )}
+                </a>
+                <div class="image-card__meta">
+                  <div class="image-card__name" title={image.original_name}>{image.original_name}</div>
+                  <div class="image-card__sub">{image.width}×{image.height} · {Math.round((image.bytes || 0) / 1024)}KB</div>
+                </div>
+                <div class="image-card__actions">
+                  <a class="admin-btn admin-btn--ghost" href={`/admin/edit/${image.id}`}>Edit</a>
+                  <button type="button" class="admin-btn admin-btn--danger" data-delete-one={image.id} data-name={image.original_name}>Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {images.length === 0 && (
+        <section class="image-empty">
+          <p>No photos in this gallery yet.</p>
+          <a class="admin-btn admin-btn--primary" href={`/upload?gallery=${g.id}`}>Upload photos →</a>
+        </section>
+      )}
+
+      <script type="module">
+        // ---- Bulk delete + per-image delete + select-all wiring ----
+        const grid = document.getElementById('image-grid');
+        const checkAll = document.getElementById('check-all');
+        const btnBulk = document.getElementById('btn-bulk-delete');
+        const selCount = document.getElementById('selected-count');
+
+        function selectedIds() {
+          if (!grid) return [];
+          return Array.from(grid.querySelectorAll('.image-check:checked')).map((el) => Number(el.value));
+        }
+
+        function updateBulkState() {
+          const n = selectedIds().length;
+          if (selCount) selCount.textContent = String(n);
+          if (btnBulk) btnBulk.disabled = n === 0;
+        }
+
+        if (grid) {
+          grid.addEventListener('change', (e) => {
+            if (e.target instanceof HTMLInputElement && e.target.classList.contains('image-check')) {
+              updateBulkState();
+            }
+          });
+        }
+
+        if (checkAll) {
+          checkAll.addEventListener('change', () => {
+            if (!grid) return;
+            grid.querySelectorAll('.image-check').forEach((el) => { el.checked = checkAll.checked; });
+            updateBulkState();
+          });
+        }
+
+        async function deleteOne(id, name) {
+          if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
+          const res = await fetch('/api/images/' + id, { method: 'DELETE' });
+          if (res.status === 204) {
+            const card = document.querySelector('.image-card[data-image-id="' + id + '"]');
+            if (card) card.remove();
+            updateBulkState();
+          } else {
+            const text = await res.text();
+            alert('Delete failed: ' + text);
+          }
+        }
+
+        document.querySelectorAll('[data-delete-one]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const id = Number(btn.getAttribute('data-delete-one'));
+            const name = btn.getAttribute('data-name') || 'this image';
+            deleteOne(id, name);
+          });
+        });
+
+        if (btnBulk) {
+          btnBulk.addEventListener('click', async () => {
+            const ids = selectedIds();
+            if (ids.length === 0) return;
+            if (!confirm('Delete ' + ids.length + ' photo' + (ids.length === 1 ? '' : 's') + '? This cannot be undone.')) return;
+            const res = await fetch('/api/images/bulk-delete', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ ids }),
+            });
+            if (res.ok) {
+              await res.json();
+              // Reload to reflect counts and grid cleanly
+              window.location.reload();
+            } else {
+              alert('Bulk delete failed: ' + await res.text());
+            }
+          });
+        }
+      </script>
+
+      <style>
+        .image-grid-section {
+          margin-top: 3rem;
+        }
+        .image-grid-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 1.25rem;
+          flex-wrap: wrap;
+          gap: 1rem;
+        }
+        .image-grid-head .edit-h2 {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin: 0;
+        }
+        .image-grid-count {
+          font-size: 0.875rem;
+          color: #888;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-weight: 400;
+        }
+        .image-grid-actions {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+        }
+        .image-grid-select-all {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.4rem;
+          font-size: 0.8125rem;
+          color: #888;
+          cursor: pointer;
+        }
+        .image-grid-select-all input { accent-color: #fafafa; }
+        .image-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          gap: 1rem;
+        }
+        .image-card {
+          background: #141414;
+          border: 1px solid #262626;
+          border-radius: 8px;
+          overflow: hidden;
+          position: relative;
+          display: flex;
+          flex-direction: column;
+        }
+        .image-card__select {
+          position: absolute;
+          top: 0.5rem;
+          left: 0.5rem;
+          z-index: 2;
+          background: rgba(0, 0, 0, 0.6);
+          border-radius: 4px;
+          padding: 0.25rem;
+          backdrop-filter: blur(4px);
+        }
+        .image-card__select input {
+          width: 18px;
+          height: 18px;
+          accent-color: #fafafa;
+          cursor: pointer;
+        }
+        .image-card__thumb {
+          display: block;
+          aspect-ratio: 1 / 1;
+          background: #0a0a0a;
+          overflow: hidden;
+          position: relative;
+        }
+        .image-card__thumb img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+        .image-card__edited-badge {
+          position: absolute;
+          top: 0.5rem;
+          right: 0.5rem;
+          background: #fafafa;
+          color: #0a0a0a;
+          font-size: 0.625rem;
+          font-weight: 700;
+          letter-spacing: 0.1em;
+          padding: 0.2rem 0.4rem;
+          border-radius: 3px;
+        }
+        .image-card__meta {
+          padding: 0.625rem 0.75rem;
+          border-top: 1px solid #262626;
+        }
+        .image-card__name {
+          font-size: 0.8125rem;
+          color: #fafafa;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .image-card__sub {
+          font-size: 0.6875rem;
+          color: #888;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          margin-top: 0.2rem;
+        }
+        .image-card__actions {
+          padding: 0.5rem 0.75rem;
+          display: flex;
+          gap: 0.4rem;
+          border-top: 1px solid #262626;
+        }
+        .image-card__actions .admin-btn {
+          flex: 1;
+          justify-content: center;
+          padding: 0.35rem 0.6rem;
+          font-size: 0.75rem;
+        }
+        .image-empty {
+          margin-top: 3rem;
+          padding: 3rem 2rem;
+          text-align: center;
+          background: #141414;
+          border: 1px dashed #262626;
+          border-radius: 8px;
+        }
+        .image-empty p {
+          color: #888;
+          margin: 0 0 1.25rem;
+        }
+      </style>
+
+    </main>
+
+    <style>
+      :root { color-scheme: dark; }
+      .admin-body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #050505;
+        color: #fafafa;
+        min-height: 100vh;
+      }
+      .admin-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1.25rem 2rem;
+        border-bottom: 1px solid #1a1a1a;
+        position: sticky;
+        top: 0;
+        background: rgba(5, 5, 5, 0.85);
+        backdrop-filter: blur(12px);
+        z-index: 50;
+      }
+      .admin-header__brand {
+        font-weight: 800;
+        font-size: 1.125rem;
+        color: #fafafa;
+        text-decoration: none;
+      }
+      .admin-header__nav {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+      .admin-header__user {
+        font-size: 0.8125rem;
+        color: #888;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .admin-header__user strong { color: #fafafa; }
+      .admin-main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 2rem 2rem 5rem;
+      }
+      .breadcrumbs a {
+        color: #888;
+        text-decoration: none;
+        font-size: 0.875rem;
+      }
+      .breadcrumbs a:hover { color: #fafafa; }
+      .edit-head {
+        margin: 1rem 0 2rem;
+      }
+      .edit-head h1 {
+        font-size: clamp(1.75rem, 4vw, 2.5rem);
+        font-weight: 800;
+        margin: 0 0 0.5rem;
+        letter-spacing: -0.025em;
+      }
+      .edit-head p {
+        margin: 0;
+        color: #888;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.8125rem;
+      }
+      .edit-head code {
+        background: rgba(255, 255, 255, 0.06);
+        padding: 0.125rem 0.5rem;
+        border-radius: 4px;
+      }
+      .edit-flash {
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+        margin: 0 0 1.5rem;
+        font-size: 0.875rem;
+      }
+      .edit-flash--ok { background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.32); color: #86efac; }
+      .edit-flash--err { background: rgba(220, 38, 38, 0.12); border: 1px solid rgba(220, 38, 38, 0.32); color: #fca5a5; }
+      .edit-grid {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 2.5rem;
+        align-items: start;
+      }
+      @media (max-width: 800px) {
+        .edit-grid { grid-template-columns: 1fr; }
+      }
+      .edit-form, .edit-aside {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid #1a1a1a;
+        border-radius: 12px;
+        padding: 2rem;
+      }
+      .edit-h2 {
+        font-size: 0.6875rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #888;
+        margin: 0 0 1.25rem;
+        font-weight: 500;
+      }
+      .edit-field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        margin-bottom: 1.25rem;
+        border: 0;
+        padding: 0;
+      }
+      .edit-field legend, .edit-field > span {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.6875rem;
+        color: #888;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .edit-field input, .edit-field select, .edit-field textarea {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid #2a2a2a;
+        color: #fafafa;
+        padding: 0.625rem 0.875rem;
+        border-radius: 8px;
+        font-size: 0.9375rem;
+        font-family: inherit;
+      }
+      .edit-field input:focus, .edit-field select:focus, .edit-field textarea:focus {
+        outline: none;
+        border-color: #fafafa;
+      }
+      .edit-field textarea { resize: vertical; font-family: inherit; }
+      .edit-field small {
+        color: #888;
+        font-size: 0.75rem;
+      }
+      .edit-field__inline {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+      }
+      .edit-field__inline span {
+        font-family: inherit;
+        font-size: 0.875rem;
+        color: #d4d4d4;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .edit-existing {
+        margin: 0 0 1rem;
+        font-size: 0.875rem;
+        color: #86efac;
+      }
+      .edit-actions {
+        display: flex;
+        gap: 0.75rem;
+        margin-top: 1.5rem;
+        flex-wrap: wrap;
+      }
+      .admin-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.625rem 1.125rem;
+        border-radius: 999px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        text-decoration: none;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: transform 0.15s ease, background 0.15s ease;
+        font-family: inherit;
+      }
+      .admin-btn--primary { background: #fafafa; color: #0a0a0a; }
+      .admin-btn--primary:hover { transform: translateY(-1px); }
+      .admin-btn--ghost { background: transparent; color: #fafafa; border-color: #2a2a2a; }
+      .admin-btn--ghost:hover { border-color: #555; }
+      .admin-btn--danger { background: transparent; color: #fca5a5; border-color: rgba(220, 38, 38, 0.32); }
+      .admin-btn--danger:hover { background: rgba(220, 38, 38, 0.12); }
+      .edit-stats {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.5rem 1rem;
+        margin: 0;
+      }
+      .edit-stats dt {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.6875rem;
+        color: #888;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .edit-stats dd {
+        margin: 0;
+        font-size: 0.875rem;
+        color: #d4d4d4;
+      }
+      .edit-stats code {
+        background: rgba(255, 255, 255, 0.06);
+        padding: 0.125rem 0.5rem;
+        border-radius: 4px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.75rem;
+        word-break: break-all;
+      }
+      .admin-link {
+        color: #fafafa;
+        text-decoration: none;
+        font-size: 0.8125rem;
+        padding: 0.25rem 0.625rem;
+        border-radius: 6px;
+      }
+      .admin-link:hover { background: rgba(255, 255, 255, 0.06); }
+    </style>
+  </body>
+</html>

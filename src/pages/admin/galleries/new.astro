@@ -1,0 +1,176 @@
+---
+/**
+ * New gallery form. POSTs to /admin/api/galleries/new.
+ */
+import { templateMeta, VALID_TEMPLATES } from '../../../lib/gallery-schemas';
+
+export const prerender = false;
+
+const error = Astro.url.searchParams.get('error');
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>New gallery — SnappyDo Admin</title>
+  </head>
+  <body class="admin-body">
+    <header class="admin-header">
+      <a href="/admin" class="admin-header__brand">SnappyDo</a>
+      <nav class="admin-header__nav">
+        <span class="admin-header__user">Signed in as <strong>{Astro.locals.admin?.user}</strong></span>
+      </nav>
+    </header>
+
+    <main class="admin-main">
+      <nav class="breadcrumbs">
+        <a href="/admin">← All galleries</a>
+      </nav>
+
+      <header class="edit-head">
+        <h1>New gallery</h1>
+        <p>Create an empty gallery. You can upload photos right after.</p>
+      </header>
+
+      {error && <p class="edit-flash edit-flash--err" role="alert">Error: {error}</p>}
+
+      <form method="POST" action="/admin/api/galleries/new" class="edit-form">
+        <label class="edit-field">
+          <span>Title</span>
+          <input type="text" name="title" required autofocus placeholder="e.g. Wedding — Ana & Lee" />
+        </label>
+
+        <label class="edit-field">
+          <span>Slug</span>
+          <input type="text" name="slug" pattern="[a-z0-9-]+" required placeholder="e.g. wedding-ana-lee" />
+          <small>Lowercase letters, numbers, hyphens. Becomes the URL: /g/your-slug-here</small>
+        </label>
+
+        <label class="edit-field">
+          <span>Description</span>
+          <textarea name="description" rows="2" placeholder="A short line about this gallery"></textarea>
+        </label>
+
+        <label class="edit-field">
+          <span>Default template</span>
+          <select name="template_id">
+            {VALID_TEMPLATES.map((tid) => (
+              <option value={tid} selected={tid === 'masonry'}>{templateMeta[tid].name}</option>
+            ))}
+          </select>
+        </label>
+
+        <label class="edit-field">
+          <span>Password (optional)</span>
+          <input type="password" name="password" autocomplete="new-password" placeholder="Leave blank for a public gallery" />
+          <small>Visitors will need this password to view photos.</small>
+        </label>
+
+        <div class="edit-actions">
+          <button type="submit" class="admin-btn admin-btn--primary">Create gallery →</button>
+          <a href="/admin" class="admin-btn admin-btn--ghost">Cancel</a>
+        </div>
+      </form>
+    </main>
+
+    <style>
+      :root { color-scheme: dark; }
+      .admin-body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #050505;
+        color: #fafafa;
+        min-height: 100vh;
+      }
+      .admin-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1.25rem 2rem;
+        border-bottom: 1px solid #1a1a1a;
+        position: sticky;
+        top: 0;
+        background: rgba(5, 5, 5, 0.85);
+        backdrop-filter: blur(12px);
+        z-index: 50;
+      }
+      .admin-header__brand {
+        font-weight: 800;
+        font-size: 1.125rem;
+        color: #fafafa;
+        text-decoration: none;
+      }
+      .admin-header__nav { display: flex; align-items: center; gap: 1rem; }
+      .admin-header__user {
+        font-size: 0.8125rem;
+        color: #888;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .admin-header__user strong { color: #fafafa; }
+      .admin-main { max-width: 640px; margin: 0 auto; padding: 2rem 2rem 5rem; }
+      .breadcrumbs a { color: #888; text-decoration: none; font-size: 0.875rem; }
+      .breadcrumbs a:hover { color: #fafafa; }
+      .edit-head { margin: 1rem 0 2rem; }
+      .edit-head h1 {
+        font-size: clamp(1.75rem, 4vw, 2.5rem);
+        font-weight: 800;
+        margin: 0 0 0.5rem;
+        letter-spacing: -0.025em;
+      }
+      .edit-head p { margin: 0; color: #888; font-size: 0.875rem; }
+      .edit-flash {
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+        margin: 0 0 1.5rem;
+        font-size: 0.875rem;
+      }
+      .edit-flash--err { background: rgba(220, 38, 38, 0.12); border: 1px solid rgba(220, 38, 38, 0.32); color: #fca5a5; }
+      .edit-form {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid #1a1a1a;
+        border-radius: 12px;
+        padding: 2rem;
+      }
+      .edit-field { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.25rem; }
+      .edit-field span {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.6875rem;
+        color: #888;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .edit-field input, .edit-field select, .edit-field textarea {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid #2a2a2a;
+        color: #fafafa;
+        padding: 0.625rem 0.875rem;
+        border-radius: 8px;
+        font-size: 0.9375rem;
+        font-family: inherit;
+      }
+      .edit-field input:focus, .edit-field select:focus, .edit-field textarea:focus {
+        outline: none;
+        border-color: #fafafa;
+      }
+      .edit-field small { color: #888; font-size: 0.75rem; }
+      .edit-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; flex-wrap: wrap; }
+      .admin-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.625rem 1.125rem;
+        border-radius: 999px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        text-decoration: none;
+        cursor: pointer;
+        border: 1px solid transparent;
+        font-family: inherit;
+      }
+      .admin-btn--primary { background: #fafafa; color: #0a0a0a; }
+      .admin-btn--ghost { background: transparent; color: #fafafa; border-color: #2a2a2a; }
+    </style>
+  </body>
+</html>

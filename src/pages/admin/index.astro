@@ -1,0 +1,262 @@
+---
+/**
+ * Photographer dashboard — lists all galleries with edit/delete/upload actions.
+ *
+ * Protected: middleware redirects to /admin/login if no admin session.
+ */
+import {
+  listGalleries,
+  imageCount,
+  type GalleryRow,
+} from '../../lib/db';
+
+export const prerender = false;
+
+const admin = Astro.locals.admin;
+const galleries: GalleryRow[] = listGalleries();
+
+// Build a small summary per gallery
+const summary = galleries.map((g) => ({
+  ...g,
+  photoCount: imageCount(g.id),
+  isProtected: Boolean(g.password_hash),
+}));
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard — SnappyDo Admin</title>
+  </head>
+  <body class="admin-body">
+    <header class="admin-header">
+      <a href="/" class="admin-header__brand">SnappyDo</a>
+      <nav class="admin-header__nav">
+        <span class="admin-header__user">Signed in as <strong>{admin?.user}</strong></span>
+        <form method="POST" action="/admin/api/logout" class="admin-header__logout-form">
+          <button type="submit" class="admin-header__logout">Sign out</button>
+        </form>
+      </nav>
+    </header>
+
+    <main class="admin-main">
+      <section class="admin-section">
+        <div class="admin-section__head">
+          <div>
+            <h1>Galleries</h1>
+            <p class="admin-section__sub">
+              {galleries.length} {galleries.length === 1 ? 'gallery' : 'galleries'}
+              {' · '}
+              {summary.reduce((s, g) => s + g.photoCount, 0)} photos total
+            </p>
+          </div>
+          <a href="/admin/galleries/new" class="admin-btn admin-btn--primary">+ New gallery</a>
+        </div>
+
+        {summary.length === 0 ? (
+          <div class="admin-empty">
+            <p>No galleries yet.</p>
+            <a href="/admin/galleries/new" class="admin-btn admin-btn--primary">Create the first one →</a>
+          </div>
+        ) : (
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Gallery</th>
+                <th>Photos</th>
+                <th>Template</th>
+                <th>Password</th>
+                <th>Slug</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.map((g) => (
+                <tr>
+                  <td>
+                    <a href={`/admin/galleries/${g.id}`} class="admin-table__title">{g.title}</a>
+                    <p class="admin-table__desc">{g.description}</p>
+                  </td>
+                  <td><code>{g.photoCount}</code></td>
+                  <td><code>{g.template_id}</code></td>
+                  <td>{g.isProtected ? '🔒' : '—'}</td>
+                  <td><code>/g/{g.slug}</code></td>
+                  <td class="admin-table__actions">
+                    <a href={`/g/${g.slug}`} class="admin-link">View</a>
+                    <a href={`/admin/galleries/${g.id}`} class="admin-link">Edit</a>
+                    <a href={`/upload?gallery=${g.id}`} class="admin-link">Upload</a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </main>
+
+    <style>
+      :root { color-scheme: dark; }
+      .admin-body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #050505;
+        color: #fafafa;
+        min-height: 100vh;
+      }
+      .admin-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1.25rem 2rem;
+        border-bottom: 1px solid #1a1a1a;
+        position: sticky;
+        top: 0;
+        background: rgba(5, 5, 5, 0.85);
+        backdrop-filter: blur(12px);
+        z-index: 50;
+      }
+      .admin-header__brand {
+        font-weight: 800;
+        font-size: 1.125rem;
+        color: #fafafa;
+        text-decoration: none;
+        letter-spacing: -0.02em;
+      }
+      .admin-header__nav {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+      .admin-header__user {
+        font-size: 0.8125rem;
+        color: #888;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .admin-header__user strong { color: #fafafa; font-weight: 600; }
+      .admin-header__logout-form { margin: 0; }
+      .admin-header__logout {
+        background: transparent;
+        color: #888;
+        border: 1px solid #2a2a2a;
+        padding: 0.4375rem 0.875rem;
+        border-radius: 999px;
+        font-size: 0.8125rem;
+        cursor: pointer;
+        transition: color 0.15s ease, border-color 0.15s ease;
+      }
+      .admin-header__logout:hover { color: #fafafa; border-color: #555; }
+      .admin-main {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 3rem 2rem 5rem;
+      }
+      .admin-section__head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        margin-bottom: 2rem;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+      .admin-section__head h1 {
+        font-size: clamp(1.75rem, 4vw, 2.5rem);
+        font-weight: 800;
+        letter-spacing: -0.025em;
+        margin: 0 0 0.25rem;
+      }
+      .admin-section__sub {
+        color: #888;
+        font-size: 0.875rem;
+        margin: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .admin-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.625rem 1.125rem;
+        border-radius: 999px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        text-decoration: none;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: transform 0.15s ease, background 0.15s ease;
+      }
+      .admin-btn--primary { background: #fafafa; color: #0a0a0a; }
+      .admin-btn--primary:hover { transform: translateY(-1px); }
+      .admin-btn--ghost { background: transparent; color: #fafafa; border-color: #2a2a2a; }
+      .admin-btn--ghost:hover { border-color: #555; }
+      .admin-btn--danger { background: transparent; color: #fca5a5; border-color: rgba(220, 38, 38, 0.32); }
+      .admin-btn--danger:hover { background: rgba(220, 38, 38, 0.12); }
+      .admin-empty {
+        border: 1px dashed #2a2a2a;
+        border-radius: 12px;
+        padding: 4rem 2rem;
+        text-align: center;
+        color: #888;
+      }
+      .admin-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid #1a1a1a;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .admin-table th {
+        text-align: left;
+        padding: 0.875rem 1rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.6875rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #888;
+        border-bottom: 1px solid #1a1a1a;
+        font-weight: 500;
+      }
+      .admin-table td {
+        padding: 1rem;
+        border-bottom: 1px solid #1a1a1a;
+        vertical-align: top;
+        font-size: 0.875rem;
+      }
+      .admin-table tr:last-child td { border-bottom: 0; }
+      .admin-table__title {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #fafafa;
+        text-decoration: none;
+      }
+      .admin-table__title:hover { text-decoration: underline; }
+      .admin-table__desc {
+        margin: 0.25rem 0 0;
+        color: #888;
+        font-size: 0.8125rem;
+        max-width: 380px;
+      }
+      .admin-table code {
+        background: rgba(255, 255, 255, 0.06);
+        padding: 0.125rem 0.5rem;
+        border-radius: 4px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.75rem;
+      }
+      .admin-table__actions {
+        text-align: right;
+        white-space: nowrap;
+      }
+      .admin-link {
+        color: #fafafa;
+        text-decoration: none;
+        font-size: 0.8125rem;
+        padding: 0.25rem 0.625rem;
+        border-radius: 6px;
+        margin-left: 0.25rem;
+      }
+      .admin-link:hover { background: rgba(255, 255, 255, 0.06); }
+    </style>
+  </body>
+</html>
