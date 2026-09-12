@@ -36,7 +36,11 @@ const initialParams = latestEdit ? JSON.parse(latestEdit.params_json) : {
 // Source URL — use the original file directly so we get full resolution.
 // imgproxy's "no resize" passthrough would be ideal but can be slow on large files.
 // The full-resolution URL via imgproxy: format=jpg, quality=95, no width cap.
-const sourceUrl = imgproxyUrl(img.path, { format: 'jpg', quality: 95 });
+const sourceUrl = `/api/images/${img.id}/source`;
+      // Same-origin endpoint with CORS headers; keeps the WebGL canvas un-tainted
+      // so canvas.toBlob() works on Save. imgproxy's URLs are cross-origin
+      // (host:8090 vs the editor on host:3010) and don't ship CORS, which
+      // silently fails <img crossorigin="anonymous">.
 ---
 
 <!doctype html>
