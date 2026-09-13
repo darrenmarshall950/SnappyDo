@@ -291,6 +291,22 @@ export const POST: APIRoute = async ({ params, request }) => {
         });
       }
     }
+    // For RAW images, fold the WB approximation into the existing temp/tint
+    // sliders before render. The math: deltaK = (kelvin - 5500) / 1000,
+    // the existing temp slider is a -100..+100 RGB shift. deltaK=+1
+    // (cooler) -> temp=-30 (warmer), deltaK=-1 (warmer) -> temp=+30.
+    // Tint stays 1:1. Not a real white balance — that's a per-sensor
+    // operation before demosaic — but gives the user a visible colour
+    // shift for the Kelvin slider. Phase 3.5 will replace this with a
+    // proper darktable-cli XMP sidecar once we crack that format.
+    if (img.raw_path && paramsObj.raw_wb_kelvin != null) {
+      const kelvin = Number(paramsObj.raw_wb_kelvin) || 5500;
+      const tintRaw = Number(paramsObj.raw_wb_tint) || 0;
+      const deltaK = (kelvin - 5500) / 1000;
+      const tempApprox = Math.max(-100, Math.min(100, Math.round(-deltaK * 30)));
+      const tintApprox = Math.max(-100, Math.min(100, Math.round(tintRaw)));
+      paramsObj = { ...paramsObj, temp: tempApprox, tint: tintApprox };
+    }
     try {
       const r = await renderWithSharp(originalPath, paramsObj);
       renderedBuf = r.buf;
