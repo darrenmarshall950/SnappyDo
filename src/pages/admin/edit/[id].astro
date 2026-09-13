@@ -690,7 +690,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
         throw new Error('no 2d ctx');
       }
 
-      const state = { ...initialParams, lut_id: 0, lut_intensity: 0 };
+      const state = { ...initialParams };
       // Lookup from LUT id → parsed { size, data: Uint8Array }
       const lutCache = new Map();
       let activeLut = null;  // { size, data } once loaded; null = no LUT pass
@@ -1118,7 +1118,6 @@ const sourceUrl = `/api/images/${img.id}/source`;
             if (v > 0) getSharpenedSource(v);
           }
           applyVignetteOverlay();
-          draw();
           draw();
         });
       });

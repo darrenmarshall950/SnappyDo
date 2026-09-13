@@ -59,6 +59,14 @@ COPY --from=build --chown=snappydo:snappydo /app/package.json ./package.json
 # Runtime data dirs — owned by snappydo user so the app can write SQLite + uploads
 RUN mkdir -p /app/data /app/uploads && chown -R snappydo:snappydo /app/data /app/uploads
 
+# Admin password hash — baked in at build time (avoids .env $ escaping issues)
+# Default: bcrypt hash of 'snappydo-v07' — override with:
+#   docker build --build-arg ADMIN_PASSWORD_HASH_B64="$(printf '%s' '$2b$12$YOURHASH' | base64 -w0)"
+ARG ADMIN_PASSWORD_HASH_B64="JDJiJDEyJFQyL3FFblV1MGNxM2FpTEs1QWFhby5nd1QwblVtNUhUSWQydVozVC45bGZYN1hSelMuZDdT"
+RUN echo "$ADMIN_PASSWORD_HASH_B64" | base64 -d > /app/data/admin_password_hash && \
+    chown snappydo:snappydo /app/data/admin_password_hash && \
+    chmod 640 /app/data/admin_password_hash
+
 USER snappydo
 
 EXPOSE 3000

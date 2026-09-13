@@ -2,18 +2,19 @@
 /**
  * FramePicker — switches the frame style for the Framed template.
  *
- * Sits next to the TemplatePicker. Adds ?frame=matte|gallery|polaroid to the
- * gallery URL. Active state mirrors the current frame style.
+ * On click: navigates to ?t=framed&frame={id} AND persists via the same
+ * /api/galleries/:id/template admin endpoint as TemplatePicker.
  */
 import type { GalleryTemplateId } from '../../lib/gallery-schemas';
 
 interface Props {
-  current: string; // current frame style
+  current: string;
   gallerySlug: string;
+  galleryId: number;
   template: GalleryTemplateId; // only show when template is 'framed'
 }
 
-const { current, gallerySlug, template } = Astro.props;
+const { current, gallerySlug, galleryId, template } = Astro.props;
 
 const FRAMES: { id: string; name: string; hint: string }[] = [
   { id: 'matte', name: 'Matte', hint: 'Soft warm-white, museum print' },
@@ -24,7 +25,7 @@ const FRAMES: { id: string; name: string; hint: string }[] = [
 if (template !== 'framed') return null;
 ---
 
-<div class="frame-picker" data-frame-picker={gallerySlug}>
+<div class="frame-picker" data-frame-picker={gallerySlug} data-gallery-id={galleryId}>
   <span class="frame-picker__label">Frame</span>
   {FRAMES.map((f) => (
     <a
@@ -37,6 +38,27 @@ if (template !== 'framed') return null;
     </a>
   ))}
 </div>
+
+<script>
+  (() => {
+    const pickers = document.querySelectorAll('[data-frame-picker]');
+    pickers.forEach((picker) => {
+      const galleryId = Number((picker as HTMLElement).dataset.galleryId);
+      picker.querySelectorAll<HTMLAnchorElement>('.frame-picker__btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const frame = btn.dataset.frame;
+          if (!frame || !galleryId) return;
+          fetch(`/api/galleries/${galleryId}/template`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ template: 'framed', frame }),
+            keepalive: true,
+          }).catch(() => { /* silent */ });
+        });
+      });
+    });
+  })();
+</script>
 
 <style>
   .frame-picker {

@@ -1,21 +1,30 @@
 ---
+/**
+ * TemplatePicker — switches the layout template for a gallery.
+ *
+ * On click: navigates to ?t={id} AND fires a POST /api/galleries/:id/template
+ * to persist the choice in the database. Saved choice becomes the new default
+ * for the gallery (visible on next visit, even without ?t=).
+ */
 import type { GalleryTemplateId } from '../../lib/gallery-schemas';
 import { templateMeta, VALID_TEMPLATES } from '../../lib/gallery-schemas';
 
 interface Props {
   current: GalleryTemplateId;
   gallerySlug: string;
+  galleryId: number; // for persistence
+  frame?: string; // optional frame style to persist alongside
 }
 
-const { current, gallerySlug } = Astro.props;
+const { current, gallerySlug, galleryId, frame } = Astro.props;
 const templates: GalleryTemplateId[] = VALID_TEMPLATES;
 ---
 
-<div class="template-picker" data-gallery-picker={gallerySlug}>
+<div class="template-picker" data-gallery-picker={gallerySlug} data-gallery-id={galleryId} data-frame={frame ?? ''}>
   <span class="template-picker__label">Layout</span>
   {templates.map((id) => (
     <a
-      href={`/g/${gallerySlug}?t=${id}`}
+      href={`/g/${gallerySlug}?t=${id}${frame ? `&frame=${frame}` : ''}`}
       class:list={['template-picker__btn', { 'is-active': id === current }]}
       data-template={id}
       title={templateMeta[id].description}
@@ -24,6 +33,30 @@ const templates: GalleryTemplateId[] = VALID_TEMPLATES;
     </a>
   ))}
 </div>
+
+<script>
+  (() => {
+    const pickers = document.querySelectorAll('[data-gallery-picker]');
+    pickers.forEach((picker) => {
+      const slug = (picker as HTMLElement).dataset.galleryPicker!;
+      const galleryId = Number((picker as HTMLElement).dataset.galleryId);
+      const frame = (picker as HTMLElement).dataset.frame || '';
+      picker.querySelectorAll<HTMLAnchorElement>('.template-picker__btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const template = btn.dataset.template;
+          if (!template || !galleryId) return;
+          // Fire-and-forget save — don't block navigation
+          fetch(`/api/galleries/${galleryId}/template`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ template, frame: frame || undefined }),
+            keepalive: true,
+          }).catch(() => { /* silent — nav still works */ });
+        });
+      });
+    });
+  })();
+</script>
 
 <style>
   .template-picker {
