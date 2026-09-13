@@ -546,7 +546,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
         </section>
 
         <section class="panel-section">
-          <h3>Light</h3>
+          <h3>Light <button id="btn-reset-light">reset</button></h3>
           <div class="slider" data-key="exposure">
             <label>Exposure</label>
             <input type="range" min="-200" max="200" step="1" />
@@ -778,16 +778,49 @@ const sourceUrl = `/api/images/${img.id}/source`;
         _sharpenCtx.drawImage(sourceImage, 0, 0, w, h);
         const sharpImg = _sharpenCtx.getImageData(0, 0, w, h);
 
-        // 2. Draw blurred source (CSS filter blur on canvas2d context)
-        _sharpenCtx.filter = 'blur(1.2px)';
-        _sharpenCtx.drawImage(sourceImage, 0, 0, w, h);
-        _sharpenCtx.filter = 'none';
-        const blurImg = _sharpenCtx.getImageData(0, 0, w, h);
+        // 2. Blur via a per-pixel 3x3 box blur (two passes — horizontal +
+        //    vertical — approximate a Gaussian sigma ≈ 1.2px). Required
+        //    because ctx.filter = 'blur(1.2px)' silently fails on iOS
+        //    Safari / WKWebView (same root cause as the live-preview
+        //    slider bug). On desktop this is slightly slower than the
+        //    native CSS blur but visually indistinguishable.
+        const sw = sharpImg.width, sh = sharpImg.height;
+        const sd = sharpImg.data;
+        const tmp = new Uint8ClampedArray(sd.length);
+        // Horizontal pass: 3-tap box into tmp
+        for (let y = 0; y < sh; y++) {
+          const row = y * sw * 4;
+          for (let x = 0; x < sw; x++) {
+            const i = row + x * 4;
+            let r = 0, g = 0, b = 0, c = 0;
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = x + dx;
+              if (nx < 0 || nx >= sw) continue;
+              const ni = row + nx * 4;
+              r += sd[ni]; g += sd[ni + 1]; b += sd[ni + 2]; c++;
+            }
+            tmp[i] = r / c; tmp[i + 1] = g / c; tmp[i + 2] = b / c; tmp[i + 3] = sd[i + 3];
+          }
+        }
+        // Vertical pass: 3-tap box into sharpImg.data
+        const blurImg = sharpImg;  // reuse the buffer
+        const bd = blurImg.data;
+        for (let y = 0; y < sh; y++) {
+          for (let x = 0; x < sw; x++) {
+            const i = (y * sw + x) * 4;
+            let r = 0, g = 0, b = 0, c = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+              const ny = y + dy;
+              if (ny < 0 || ny >= sh) continue;
+              const ni = (ny * sw + x) * 4;
+              r += tmp[ni]; g += tmp[ni + 1]; b += tmp[ni + 2]; c++;
+            }
+            bd[i] = r / c; bd[i + 1] = g / c; bd[i + 2] = b / c; bd[i + 3] = tmp[i + 3];
+          }
+        }
 
         // 3. Unsharp mask: out = src + (src - blur) * amount
         const k = amount / 100;  // 0..1
-        const sd = sharpImg.data;
-        const bd = blurImg.data;
         for (let i = 0; i < sd.length; i += 4) {
           const dr = sd[i]   - bd[i];
           const dg = sd[i+1] - bd[i+1];
@@ -1248,6 +1281,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
         activeLut = null;
         draw();
       };
+      document.getElementById('btn-reset-light').onclick = () => resetKeys(['exposure','contrast','brightness']);
       document.getElementById('btn-reset-tone').onclick = () => resetKeys(['highlights','shadows','whites','blacks']);
       document.getElementById('btn-reset-color').onclick = () => resetKeys(['saturation','temp','tint']);
       document.getElementById('btn-reset-fx').onclick = () => { resetKeys(['sharpen','vignette']); };
