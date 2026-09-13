@@ -225,6 +225,7 @@ export const POST: APIRoute = async ({ params, request }) => {
   let paramsObj: any;
   let renderedBuf: Buffer;
   let cropApplied: any | null = null;
+  let lutApplied: { id: number; name: string; intensity: number } | null = null;
 
   if (contentType.includes('application/json')) {
     // JSON mode — server-side render
@@ -242,6 +243,7 @@ export const POST: APIRoute = async ({ params, request }) => {
       const r = await renderWithSharp(originalPath, paramsObj);
       renderedBuf = r.buf;
       cropApplied = r.appliedCrop;
+      lutApplied = r.appliedLut;
     } catch (e: any) {
       return new Response(JSON.stringify({ error: 'render failed: ' + e.message }), {
         status: 500, headers: { 'content-type': 'application/json' },
@@ -281,7 +283,7 @@ export const POST: APIRoute = async ({ params, request }) => {
   const persistedParams = {
     ...paramsObj,
     _appliedCrop: cropApplied,
-    _appliedLut: appliedLut,
+    _appliedLut: lutApplied,
   };
   insertImageEdit({
     image_id: id,
