@@ -24,6 +24,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
+import { getLutById, getLutData, applyLutToRgba } from '../../../../lib/luts';
 import { getImage } from '../../../../lib/db';
 import {
   insertImageEdit,
@@ -181,8 +182,29 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
     }]);
   }
 
+  // ---- LUT pass (after all colour ops) ----
+  // LUTs apply last because they're holistic colour-grading transforms.
+  // Trilinear interp gives smooth gradients; nearest is faster but bands.
+  // We use trilinear on the server (one-off, full res is fine).
+  const lutId = Number(params.lut_id) || 0;
+  const lutIntensity = Math.max(0, Math.min(100, Number(params.lut_intensity) || 0));
+  let appliedLut: { id: number; name: string; intensity: number } | null = null;
+  if (lutId > 0 && lutIntensity > 0) {
+    const lutRow = getLutById(lutId);
+    if (lutRow && lutRow.enabled_global) {
+      const lut = getLutData(lutRow);
+      // Pull RGBA at full resolution, apply LUT in place, re-encode.
+      const rgba = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      applyLutToRgba(lut.size, lut.data, rgba.data, lutIntensity / 100, false);
+      pipeline = sharp(rgba.data, {
+        raw: { width: rgba.info.width, height: rgba.info.height, channels: 4 },
+      });
+      appliedLut = { id: lutRow.id, name: lutRow.name, intensity: lutIntensity };
+    }
+  }
+
   const buf = await pipeline.jpeg({ quality: 95, mozjpeg: true }).toBuffer();
-  return { buf, appliedCrop };
+  return { buf, appliedCrop, appliedLut };
 }
 
 export const POST: APIRoute = async ({ params, request }) => {
@@ -256,7 +278,11 @@ export const POST: APIRoute = async ({ params, request }) => {
   await writeFile(fullPath, renderedBuf);
 
   // Persist with crop info merged in (so re-edit knows the exact crop px)
-  const persistedParams = { ...paramsObj, _appliedCrop: cropApplied };
+  const persistedParams = {
+    ...paramsObj,
+    _appliedCrop: cropApplied,
+    _appliedLut: appliedLut,
+  };
   insertImageEdit({
     image_id: id,
     params_json: JSON.stringify(persistedParams),
