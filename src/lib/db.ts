@@ -181,13 +181,14 @@ export function insertImage(input: {
   bytes?: number | null;
   mime: string;
   exif?: Record<string, unknown>;
+  raw_path?: string | null;
 }): number {
   const next = (getDb()
     .prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM images WHERE gallery_id = ?')
     .get(input.gallery_id) as { n: number }).n;
   const stmt = getDb().prepare(`
-    INSERT INTO images (gallery_id, path, original_name, width, height, bytes, mime, exif_json, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO images (gallery_id, path, original_name, width, height, bytes, mime, exif_json, sort_order, raw_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const info = stmt.run(
     input.gallery_id,
@@ -199,6 +200,7 @@ export function insertImage(input: {
     input.mime,
     JSON.stringify(input.exif ?? {}),
     next,
+    input.raw_path ?? null,
   );
   return Number(info.lastInsertRowid);
 }

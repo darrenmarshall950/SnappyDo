@@ -41,12 +41,25 @@ const img = Number.isFinite(id) ? getImage(id) : undefined;
 if (!img) return Astro.redirect('/admin', 302);
 
 const exif = formatExif(parseExif(img.exif_json));
+const isRaw = !!img.raw_path;
+
+// Default values for RAW-only controls. Kelvin is 5500 (daylight),
+// not 0, because "no WB adjustment" is a real setting, not "off".
+const RAW_DEFAULTS: Record<string, number | boolean> = {
+  raw_wb_kelvin: 5500,
+  raw_wb_tint: 0,
+  raw_nr_lum: 0,
+  raw_nr_chroma: 0,
+  raw_lens_on: 0,
+};
+const RAW_KEYS = Object.keys(RAW_DEFAULTS);
 
 const latestEdit = getLatestImageEdit(id);
 const initialParams = latestEdit ? JSON.parse(latestEdit.params_json) : {
   exposure: 0, contrast: 0, saturation: 0, brightness: 0,
   highlights: 0, shadows: 0, whites: 0, blacks: 0,
   temp: 0, tint: 0, sharpen: 0, vignette: 0,
+  ...RAW_DEFAULTS,
   crop: null, // { x, y, w, h } in 0..1 UV space, or null
 };
 
@@ -247,6 +260,34 @@ const sourceUrl = `/api/images/${img.id}/source`;
         font-weight: 400;
       }
       .panel-section h3 button:hover { color: var(--text); }
+      .raw-note {
+        font-size: 0.6875rem;
+        color: var(--muted);
+        margin: 0 0 0.75rem;
+        font-style: italic;
+        line-height: 1.35;
+      }
+      .raw-subhead {
+        font-size: 0.6875rem;
+        color: var(--text);
+        margin: 0.625rem 0 0.375rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+      }
+      .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.8125rem;
+        color: #d4d4d4;
+        margin: 0.25rem 0;
+      }
+      .checkbox-row input[type="checkbox"] {
+        width: 14px;
+        height: 14px;
+        accent-color: #fafafa;
+        cursor: pointer;
+      }
       .slider {
         display: grid;
         grid-template-columns: 1fr 56px;
@@ -620,6 +661,43 @@ const sourceUrl = `/api/images/${img.id}/source`;
             <span class="val">0</span>
           </div>
         </section>
+
+        {isRaw && (
+          <section class="panel-section" id="section-raw">
+            <h3>RAW <button id="btn-reset-raw">reset</button></h3>
+            <div class="raw-note">Live preview uses the cached JPEG approximation. Full RAW render on Save (via darktable-cli).</div>
+
+            <div class="raw-subhead">White Balance</div>
+            <div class="slider" data-key="raw_wb_kelvin">
+              <label>Kelvin</label>
+              <input type="range" min="2000" max="10000" step="50" />
+              <span class="val">5500</span>
+            </div>
+            <div class="slider" data-key="raw_wb_tint">
+              <label>Tint (M/G)</label>
+              <input type="range" min="-100" max="100" step="1" />
+              <span class="val">0</span>
+            </div>
+
+            <div class="raw-subhead">Noise Reduction</div>
+            <div class="slider" data-key="raw_nr_lum">
+              <label>Luminance</label>
+              <input type="range" min="0" max="100" step="1" />
+              <span class="val">0</span>
+            </div>
+            <div class="slider" data-key="raw_nr_chroma">
+              <label>Chroma</label>
+              <input type="range" min="0" max="100" step="1" />
+              <span class="val">0</span>
+            </div>
+
+            <div class="raw-subhead">Lens</div>
+            <div class="checkbox-row">
+              <input type="checkbox" id="raw-lens-on" />
+              <label for="raw-lens-on">Auto lens corrections</label>
+            </div>
+          </section>
+        )}
 
         <section class="panel-section">
           <h3>Crop</h3>
@@ -1040,7 +1118,8 @@ const sourceUrl = `/api/images/${img.id}/source`;
       // canvas and look like a "vignetted box at the centre" sitting on top
       // of the (correctly baked) saved image.
       let _resetOnLoad = false;
-      const SLIDER_KEYS = ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette','lut_intensity'];
+      const SLIDER_KEYS = ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette','lut_intensity', ...RAW_KEYS];
+      const isRawAtRuntime = document.getElementById('section-raw') !== null;
       function resetAllStateAndUi() {
         for (const k of SLIDER_KEYS) state[k] = 0;
         state.crop = null;
@@ -1070,7 +1149,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
       sourceImage.src = sourceUrl;
 
       // ---- Presets + LUTs ----
-      const PRESET_SLIDER_KEYS = ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette','lut_intensity'];
+      const PRESET_SLIDER_KEYS = ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette','lut_intensity', ...RAW_KEYS];
 
       async function loadPresets() {
         try {
@@ -1271,6 +1350,20 @@ const sourceUrl = `/api/images/${img.id}/source`;
       }
       btnReset.onclick = () => {
         ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette','lut_intensity'].forEach((k) => { state[k] = 0; });
+        if (isRawAtRuntime) {
+          for (const k of RAW_KEYS) {
+            state[k] = RAW_DEFAULTS[k];
+            const wrap = document.querySelector('.slider[data-key="' + k + '"]');
+            if (wrap) {
+              const inp = wrap.querySelector('input');
+              const valEl = wrap.querySelector('.val');
+              if (inp) inp.value = String(RAW_DEFAULTS[k]);
+              if (valEl) valEl.textContent = String(RAW_DEFAULTS[k]);
+            }
+          }
+          const lensCb = document.getElementById('raw-lens-on');
+          if (lensCb) lensCb.checked = false;
+        }
         document.querySelectorAll('.slider').forEach((wrap) => {
           const input = wrap.querySelector('input');
           const valEl = wrap.querySelector('.val');
@@ -1288,6 +1381,31 @@ const sourceUrl = `/api/images/${img.id}/source`;
       document.getElementById('btn-reset-tone').onclick = () => resetKeys(['highlights','shadows','whites','blacks']);
       document.getElementById('btn-reset-color').onclick = () => resetKeys(['saturation','temp','tint']);
       document.getElementById('btn-reset-fx').onclick = () => { resetKeys(['sharpen','vignette']); };
+      const btnResetRaw = document.getElementById('btn-reset-raw');
+      if (btnResetRaw) {
+        btnResetRaw.onclick = () => {
+          for (const k of RAW_KEYS) {
+            state[k] = RAW_DEFAULTS[k];
+            const wrap = document.querySelector('.slider[data-key="' + k + '"]');
+            if (wrap) {
+              const inp = wrap.querySelector('input');
+              const valEl = wrap.querySelector('.val');
+              if (inp) inp.value = String(RAW_DEFAULTS[k]);
+              if (valEl) valEl.textContent = String(RAW_DEFAULTS[k]);
+            }
+          }
+          const lensCb = document.getElementById('raw-lens-on');
+          if (lensCb) lensCb.checked = false;
+        };
+      }
+      // Wire the lens checkbox to state
+      const lensCbEl = document.getElementById('raw-lens-on');
+      if (lensCbEl) {
+        lensCbEl.checked = !!state.raw_lens_on;
+        lensCbEl.addEventListener('change', () => {
+          state.raw_lens_on = lensCbEl.checked ? 1 : 0;
+        });
+      }
 
       // ---- Crop drag (works on the canvas) ----
       let cropBox = null;       // { x, y, w, h } in canvas pixels

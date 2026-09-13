@@ -18,7 +18,7 @@
  */
 import type { APIRoute } from 'astro';
 import { createWriteStream } from "node:fs";
-import { mkdir, rename, unlink, stat, readFile } from "node:fs/promises";
+import { mkdir, rename, unlink, stat, readFile, writeFile } from "node:fs/promises";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from 'node:util';
 import { join } from 'node:path';
@@ -272,14 +272,15 @@ export const POST: APIRoute = async ({ request }) => {
 
           uploaded.push({
             id,
-            path: stored,
+            path: previewPath,
             original_name: filename,
-            width: dims.width,
-            height: dims.height,
-            bytes: bytesWritten,
-            mime: mimeType,
+            width: previewWidth,
+            height: previewHeight,
+            bytes: previewBytes,
+            mime: previewMime,
             exif: exif as Record<string, unknown>,
-          });
+            raw_path: rawPath,
+          } as any);
         } catch (err) {
           errors.push(`${filename}: ${(err as Error).message}`);
         } finally {
@@ -387,18 +388,25 @@ async function runDarktableCli(inputPath: string, outputPath: string, timeoutMs:
   // first run. Ensure the dir exists so it doesn't bail.
   await mkdir('/app/.config/darktable', { recursive: true });
   const env = { ...process.env, HOME: '/app' };
+  // darktable 4.x CLI syntax: darktable-cli <input> <XMP> <output> [opts].
+  // The second positional IS the XMP sidecar — passing a 0-byte file is
+  // rejected with 'can't open XMP file'. We write a minimal valid xmpmeta
+  // empty sidecar at runtime (lives in /tmp so the container image stays
+  // lean) and pass it as the XMP arg.
+  const xmpPath = '/tmp/snappydo-empty.xmp';
+  await writeFile(xmpPath, '<?xml version="1.0" encoding="UTF-8"?>\n<x:xmpmeta xmlns:x="adobe:ns:meta/">\n</x:xmpmeta>\n', 'utf8');
   await execFile('darktable-cli', [
     inputPath,
+    xmpPath,
     outputPath,
     '--width', '1920',
-    '--quality', '90',
+    '--hq', 'true',
     '--core',
     '--conf', 'plugins/lighttable/export/iccprofile=image',
-    // Enable OpenCL on the RTX 4070 SUPER (NVIDIA Container Toolkit CDI
+    // OpenCL on the RTX 4070 SUPER (NVIDIA Container Toolkit CDI
     // bind-mounts libnvidia-opencl.so.1 + the host's ICD vendor file).
-    // For simple preview rendering the speedup is small (~10%) because
-    // the pipeline is memory-bound, but for heavy edits (lens correction,
-    // denoise, multi-stage colour) OpenCL scales to 3-5x faster than CPU.
+    // Speedup is modest for simple preview (~10%, memory-bound) but
+    // scales to 3-5x for heavy edits (lens correction, denoise).
     '--conf', 'opencl=TRUE',
     '--conf', 'opencl_scheduling_profile=very fast GPU',
   ], { timeout: timeoutMs, env });
