@@ -45,6 +45,8 @@ ENV PORT=3000
 # Runtime libs only (no compilers)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips42 \
+    ocl-icd-libopencl1 \
+    clinfo \
     darktable \
     libexiv2-27 \
     exiftool \
@@ -69,6 +71,13 @@ ARG ADMIN_PASSWORD_HASH_B64="JDJiJDEyJFQyL3FFblV1MGNxM2FpTEs1QWFhby5nd1QwblVtNUh
 RUN echo "$ADMIN_PASSWORD_HASH_B64" | base64 -d > /app/data/admin_password_hash && \
     chown snappydo:snappydo /app/data/admin_password_hash && \
     chmod 640 /app/data/admin_password_hash
+
+# NVIDIA OpenCL ICD descriptor — points at the lib that the
+# nvidia-container-toolkit CDI spec bind-mounts into the container.
+# Without this file, OpenCL loaders see zero platforms even when the
+# GPU and libnvidia-opencl.so.1 are present.
+RUN mkdir -p /etc/OpenCL/vendors &&     echo '/usr/lib/x86_64-linux-gnu/libnvidia-opencl.so.1' \
+        > /etc/OpenCL/vendors/nvidia.icd &&     chown -R snappydo:snappydo /etc/OpenCL
 
 USER snappydo
 

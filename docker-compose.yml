@@ -17,6 +17,14 @@ services:
         PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL:-}
         PUBLIC_SUPABASE_ANON_KEY: ${PUBLIC_SUPABASE_ANON_KEY:-}
     image: snappydo:latest
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu,compute,utility]
     container_name: snappydo-app
     restart: unless-stopped
     ports:
@@ -50,6 +58,12 @@ services:
       - WATERMARK_TEXT=${WATERMARK_TEXT:-}
       - WATERMARK_OPACITY=${WATERMARK_OPACITY:-30}
       - WATERMARK_POSITION=${WATERMARK_POSITION:-southeast}
+      # NVIDIA driver capabilities — needs opencl + compute + utility for
+      # darktable-cli GPU acceleration. Without 'opencl' the toolkit
+      # doesn't mount /etc/OpenCL/vendors/nvidia.icd and darktable sees
+      # zero OpenCL platforms.
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,opencl
+      - NVIDIA_VISIBLE_DEVICES=all
     volumes:
       - snappydo_uploads:/app/uploads
       - snappydo_data:/app/data

@@ -394,5 +394,12 @@ async function runDarktableCli(inputPath: string, outputPath: string, timeoutMs:
     '--quality', '90',
     '--core',
     '--conf', 'plugins/lighttable/export/iccprofile=image',
+    // Enable OpenCL on the RTX 4070 SUPER (NVIDIA Container Toolkit CDI
+    // bind-mounts libnvidia-opencl.so.1 + the host's ICD vendor file).
+    // For simple preview rendering the speedup is small (~10%) because
+    // the pipeline is memory-bound, but for heavy edits (lens correction,
+    // denoise, multi-stage colour) OpenCL scales to 3-5x faster than CPU.
+    '--conf', 'opencl=TRUE',
+    '--conf', 'opencl_scheduling_profile=very fast GPU',
   ], { timeout: timeoutMs, env });
 }
