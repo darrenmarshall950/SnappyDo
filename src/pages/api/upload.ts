@@ -18,16 +18,17 @@
  */
 import type { APIRoute } from 'astro';
 import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rename, unlink, stat, readFile } from "node:fs/promises";
+import { execFile as execFileCb } from "node:child_process";
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Busboy from 'busboy';
 import { Readable, pipeline } from 'node:stream';
-import { promisify } from 'node:util';
 import { insertImage, getGalleryBySlug } from '../../lib/db';
 import { extractExif } from '../../lib/exif';
 
 const pipelineAsync = promisify(pipeline);
+const execFile = promisify(execFileCb);
 
 export const prerender = false;
 
@@ -36,6 +37,25 @@ const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB — raise if you shoot RAWs
 const MAX_FILES_PER_REQUEST = 500; // soft cap
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 min safety net
 const HEADER_READ_BYTES = 256 * 1024;
+
+// RAW camera file extensions. Browsers send these as application/octet-stream
+// so we identify by file extension rather than MIME type.
+const RAW_EXTENSIONS = new Set([
+  'rw2',  // Panasonic Lumix
+  'orf',  // Olympus / OM System
+  'dng',  // Adobe Digital Negative
+  'cr2', 'cr3',  // Canon
+  'nef', 'nrw',  // Nikon
+  'arw', 'srf', 'sr2',  // Sony
+  'raf',  // Fujifilm
+  'rw2',  // Panasonic (dup of above, kept for clarity)
+  'pef',  // Pentax
+  '3fr',  // Hasselblad
+  'iiq',  // Phase One
+  'x3f',  // Sigma
+  'mrw',  // Minolta / Sony (legacy)
+  'rwl',  // Leica
+]);
 const ALLOWED_MIME = new Set([
   'image/jpeg',
   'image/png',
@@ -123,8 +143,12 @@ export const POST: APIRoute = async ({ request }) => {
       totalFilesSeen++;
       const { filename, mimeType } = info;
 
-      // Reject early on type — drain the stream so busboy can move on
-      if (!ALLOWED_MIME.has(mimeType)) {
+      // Accept either an allowed MIME OR a known RAW extension. Browsers
+      // send RAW as application/octet-stream, so MIME alone won't catch
+      // .RW2 / .ORF / .DNG.
+      const fileExt = extensionFromName(filename) || '';
+      const isRaw = RAW_EXTENSIONS.has(fileExt.toLowerCase());
+      if (!isRaw && !ALLOWED_MIME.has(mimeType)) {
         errors.push(`skipped ${filename}: unsupported type ${mimeType}`);
         file.resume();
         pendingFiles--;
@@ -132,7 +156,9 @@ export const POST: APIRoute = async ({ request }) => {
         return;
       }
 
-      const ext = extensionFromMime(mimeType) || extensionFromName(filename) || 'jpg';
+      const ext = isRaw
+        ? (fileExt.toLowerCase() || 'raw')
+        : (extensionFromMime(mimeType) || extensionFromName(filename) || 'jpg');
       const stored = `${randomUUID()}.${ext}`;
       const fullPath = join(UPLOAD_DIR, stored);
       const out = createWriteStream(fullPath);
@@ -186,16 +212,62 @@ export const POST: APIRoute = async ({ request }) => {
             Promise.resolve(readDimensions(headerBuf, mimeType)),
           ]);
 
+          let previewPath = stored;
+          let previewExt = ext;
+          let previewMime = mimeType;
+          let previewBytes = bytesWritten;
+          let previewWidth = dims.width;
+          let previewHeight = dims.height;
+          let rawPath: string | null = null;
+
+          if (isRaw) {
+            // Move the just-written RAW into a `raws/` subdir so it's
+            // clearly separated from rendered previews.
+            const rawsDir = join(UPLOAD_DIR, 'raws');
+            await mkdir(rawsDir, { recursive: true });
+            rawPath = `raws/${stored}`;
+            try {
+              await rename(fullPath, join(UPLOAD_DIR, rawPath));
+            } catch (err) {
+              errors.push(`failed to move RAW ${filename}: ${(err as Error).message}`);
+              return;
+            }
+            // Render a 1920px JPEG preview via darktable-cli.
+            const previewUuid = randomUUID();
+            previewPath = `${previewUuid}.jpg`;
+            const previewFull = join(UPLOAD_DIR, previewPath);
+            const rawFull = join(UPLOAD_DIR, rawPath);
+            try {
+              const timeoutMs = 60000;
+              await runDarktableCli(rawFull, previewFull, timeoutMs);
+              const previewStat = await stat(previewFull);
+              previewBytes = previewStat.size;
+              // Re-read dimensions from the JPEG preview
+              const previewBuf = await readFile(previewFull);
+              const previewDims = readDimensions(previewBuf, 'image/jpeg');
+              previewWidth = previewDims.width;
+              previewHeight = previewDims.height;
+              previewExt = 'jpg';
+              previewMime = 'image/jpeg';
+            } catch (err) {
+              errors.push(`darktable-cli failed on ${filename}: ${(err as Error).message}`);
+              // Clean up the orphan RAW so disk doesn't fill with failed runs.
+              try { await unlink(rawFull); } catch {}
+              return;
+            }
+          }
+
           const id = insertImage({
             gallery_id: gallery.id,
-            path: stored,
+            path: previewPath,
             original_name: filename,
-            width: dims.width,
-            height: dims.height,
-            bytes: bytesWritten,
-            mime: mimeType,
+            width: previewWidth,
+            height: previewHeight,
+            bytes: previewBytes,
+            mime: previewMime,
             exif: exif as Record<string, unknown>,
-          });
+            raw_path: rawPath,
+          } as any);
 
           uploaded.push({
             id,
@@ -298,4 +370,28 @@ function readDimensions(
     // ignore
   }
   return { width: null, height: null };
+}
+
+/**
+ * Render a RAW file to a JPEG preview using darktable-cli. Resolves on
+ * success, rejects on failure (darktable exits non-zero) or timeout.
+ *
+ *   darktable-cli <input.RAW> <output.jpg> --width 1920 --quality 90
+ *
+ * `--width 1920` caps the long edge; original orientation is preserved
+ * from the EXIF (darktable applies it by default).
+ */
+async function runDarktableCli(inputPath: string, outputPath: string, timeoutMs: number): Promise<void> {
+  // darktable-cli writes its library DB under $HOME/.config/darktable on
+  // first run. Ensure the dir exists so it doesn't bail.
+  await mkdir('/app/.config/darktable', { recursive: true });
+  const env = { ...process.env, HOME: '/app' };
+  await execFile('darktable-cli', [
+    inputPath,
+    outputPath,
+    '--width', '1920',
+    '--quality', '90',
+    '--core',
+    '--conf', 'plugins/lighttable/export/iccprofile=image',
+  ], { timeout: timeoutMs, env });
 }

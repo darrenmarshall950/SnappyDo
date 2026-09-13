@@ -45,6 +45,9 @@ ENV PORT=3000
 # Runtime libs only (no compilers)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips42 \
+    darktable \
+    libexiv2-27 \
+    exiftool \
     dumb-init \
     && rm -rf /var/lib/apt/lists/*
 
@@ -57,7 +60,7 @@ COPY --from=build --chown=snappydo:snappydo /app/node_modules ./node_modules
 COPY --from=build --chown=snappydo:snappydo /app/package.json ./package.json
 
 # Runtime data dirs — owned by snappydo user so the app can write SQLite + uploads
-RUN mkdir -p /app/data /app/uploads && chown -R snappydo:snappydo /app/data /app/uploads
+RUN mkdir -p /app/data /app/uploads /app/.config/darktable /app/.cache/darktable && chown -R snappydo:snappydo /app/data /app/uploads /app/.config /app/.cache
 
 # Admin password hash — baked in at build time (avoids .env $ escaping issues)
 # Default: bcrypt hash of 'snappydo-v07' — override with:

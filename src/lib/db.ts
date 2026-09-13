@@ -70,6 +70,13 @@ export function getDb(): Database.Database {
     try { db.exec('ALTER TABLE galleries ADD COLUMN password_hash TEXT'); } catch { /* ignore */ }
   }
 
+  // Idempotent column migration — raw_path for RAW originals (Panasonic
+  // RW2, Olympus ORF, DNG, etc.). NULL for plain JPEG/PNG uploads.
+  const iCols = (db.prepare("PRAGMA table_info(images)").all() as { name: string }[]).map((r) => r.name);
+  if (!iCols.includes('raw_path')) {
+    try { db.exec('ALTER TABLE images ADD COLUMN raw_path TEXT DEFAULT NULL'); } catch { /* ignore */ }
+  }
+
   // Seed with sample galleries on first boot
   const count = (db.prepare('SELECT COUNT(*) as n FROM galleries').get() as { n: number }).n;
   if (count === 0) {
