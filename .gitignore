@@ -41,3 +41,6 @@ coverage/
 
 # Local test artifacts
 _test/
+# LUT pack bulk-import source files (already imported into DB; re-import
+# via scripts/bulk-upload-luts.py if needed)
+/lut-packs/**/*.cube
