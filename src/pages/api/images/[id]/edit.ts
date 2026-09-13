@@ -20,10 +20,13 @@
  * Auth: admin only.
  */
 import type { APIRoute } from 'astro';
-import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { writeFile, mkdir, readFile, unlink } from 'node:fs/promises';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import sharp from 'sharp';
+import sharp from "sharp";
+import { promisify } from "node:util";
+import { execFile as execFileCb } from 'node:child_process';
+const execFile = promisify(execFileCb);
 import { getLutById, getLutData, applyLutToRgba } from '../../../../lib/luts';
 import { getImage } from '../../../../lib/db';
 import {
@@ -206,6 +209,38 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
   const buf = await pipeline.jpeg({ quality: 95, mozjpeg: true }).toBuffer();
   return { buf, appliedCrop, appliedLut };
 }
+/**
+ * Render a RAW file to JPEG via darktable-cli. Default processing only
+ * (no XMP sidecar). Resolves on success, rejects on darktable failure
+ * or timeout.
+ *
+ *   darktable-cli <input.RAW> <xmp> <output.jpg> --width 1920 --hq true
+ *
+ * The XMP arg is required syntactically but its contents are ignored
+ * unless we encode a full history — Phase 3.5 work. For now, empty XMP
+ * means darktable applies its built-in defaults (sensible demosaic +
+ * sRGB output).
+ */
+async function renderWithDarktable(rawPath: string, outputPath: string, timeoutMs: number): Promise<void> {
+  await mkdir('/app/.config/darktable', { recursive: true });
+  await mkdir('/app/.cache/darktable', { recursive: true });
+  const xmpPath = '/tmp/snappydo-empty.xmp';
+  await writeFile(xmpPath, '<?xml version="1.0" encoding="UTF-8"?>\n<x:xmpmeta xmlns:x="adobe:ns:meta/">\n</x:xmpmeta>\n', 'utf8');
+  const env = { ...process.env, HOME: '/app' };
+  await execFile('darktable-cli', [
+    rawPath,
+    xmpPath,
+    outputPath,
+    '--width', '1920',
+    '--hq', 'true',
+    '--core',
+    '--conf', 'plugins/lighttable/export/iccprofile=image',
+    '--conf', 'opencl=TRUE',
+    '--conf', 'opencl_scheduling_profile=very fast GPU',
+  ], { timeout: timeoutMs, env });
+}
+
+
 
 export const POST: APIRoute = async ({ params, request }) => {
   if (!readAdminSession(request)) return unauthorized();
@@ -238,17 +273,39 @@ export const POST: APIRoute = async ({ params, request }) => {
     paramsObj = body?.params;
     if (!paramsObj || typeof paramsObj !== 'object') return badRequest('params required');
 
-    const originalPath = join(UPLOAD_DIR, img.path);
+    let originalPath = join(UPLOAD_DIR, img.path);
+    let rawRenderedPath: string | null = null;
+    let rawAppliedLut: { id: number; name: string; intensity: number } | null = null;
+    // ---- RAW path: re-render the original sensor data via darktable-cli
+    // first so sharp gets a fresh, full-quality base instead of working on
+    // the JPEG preview (which is already compressed). ----
+    if (img.raw_path) {
+      const rawFull = join(UPLOAD_DIR, img.raw_path);
+      rawRenderedPath = join('/tmp', `snappydo-raw-${id}-${Date.now()}.jpg`);
+      try {
+        await renderWithDarktable(rawFull, rawRenderedPath, 90000);
+        originalPath = rawRenderedPath;
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'darktable-cli failed: ' + e.message }), {
+          status: 500, headers: { 'content-type': 'application/json' },
+        });
+      }
+    }
     try {
       const r = await renderWithSharp(originalPath, paramsObj);
       renderedBuf = r.buf;
       cropApplied = r.appliedCrop;
       lutApplied = r.appliedLut;
+      rawAppliedLut = lutApplied;
     } catch (e: any) {
+      // Clean up the temp RAW render on failure
+      if (rawRenderedPath) { try { await unlink(rawRenderedPath); } catch {} }
       return new Response(JSON.stringify({ error: 'render failed: ' + e.message }), {
         status: 500, headers: { 'content-type': 'application/json' },
       });
     }
+    // Clean up the temp RAW render now that sharp has consumed it
+    if (rawRenderedPath) { try { await unlink(rawRenderedPath); } catch {} }
   } else {
     // Multipart mode (legacy)
     let form: FormData;

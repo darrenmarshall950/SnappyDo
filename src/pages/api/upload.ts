@@ -21,11 +21,12 @@ import { createWriteStream } from "node:fs";
 import { mkdir, rename, unlink, stat, readFile, writeFile } from "node:fs/promises";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Busboy from 'busboy';
 import { Readable, pipeline } from 'node:stream';
-import { insertImage, getGalleryBySlug } from '../../lib/db';
+import { insertImage, getGalleryBySlug, getDb } from '../../lib/db';
 import { extractExif } from '../../lib/exif';
 
 const pipelineAsync = promisify(pipeline);
@@ -208,9 +209,34 @@ export const POST: APIRoute = async ({ request }) => {
           }
 
           const headerBuf = Buffer.concat(headerChunks, headerBytes);
-          const [exif, dims] = await Promise.all([
+          const fileHash = headerHash(headerBuf);
+          // Compute dims early — readDimensions just inspects the buffer.
+          const dims = readDimensions(headerBuf, mimeType);
+          // Check for an existing duplicate (by content hash stored in exif_json).
+          const existing = findExistingByHash(fileHash);
+          if (existing) {
+            // Return the existing record so the client gets the same id.
+            // Use the stored width/height/mime from the original row — for
+            // RAW files the header buffer doesn't contain standard dimension
+            // markers, so the local dims/mimeType would be null.
+            uploaded.push({
+              id: existing.id,
+              path: existing.path,
+              original_name: filename,
+              width: existing.width,
+              height: existing.height,
+              bytes: existing.bytes,
+              mime: existing.mime,
+              exif: { _deduped: true, _dedupedFrom: existing.id },
+              raw_path: null,
+            } as any);
+            // Clean up the file we just streamed to disk for this duplicate —
+            // no point keeping it since we're pointing at the existing copy.
+            try { await unlink(fullPath); } catch {}
+            return;  // finally{} still decrements pendingFiles and calls maybeResolve
+          }
+          const [exif] = await Promise.all([
             extractExif(headerBuf).catch(() => ({})),
-            Promise.resolve(readDimensions(headerBuf, mimeType)),
           ]);
 
           let previewPath = stored;
@@ -258,6 +284,7 @@ export const POST: APIRoute = async ({ request }) => {
             }
           }
 
+          const exifWithHash = { ...(exif as Record<string, unknown>), _hash: fileHash };
           const id = insertImage({
             gallery_id: gallery.id,
             path: previewPath,
@@ -266,7 +293,7 @@ export const POST: APIRoute = async ({ request }) => {
             height: previewHeight,
             bytes: previewBytes,
             mime: previewMime,
-            exif: exif as Record<string, unknown>,
+            exif: exifWithHash,
             raw_path: rawPath,
           } as any);
 
@@ -411,3 +438,27 @@ async function runDarktableCli(inputPath: string, outputPath: string, timeoutMs:
     '--conf', 'opencl_scheduling_profile=very fast GPU',
   ], { timeout: timeoutMs, env });
 }
+
+/**
+ * SHA256 of the uploaded header bytes — used as a dedupe key. Two
+ * uploads of the same file always produce the same hash for the first
+ * 256KB; full-file hashing would slow things down for no benefit since
+ * the rest of the file is also identical when the prefix is.
+ */
+function headerHash(buf: Buffer): string {
+  return createHash('sha256').update(buf).digest('hex');
+}
+
+/**
+ * Find an existing image by content hash via the shared getDb() connection.
+ * Using a second SQLite connection here was hanging uploads — better-sqlite3
+ * is sync and opening a new connection per upload was too slow.
+ */
+function findExistingByHash(hash: string): { id: number; path: string; bytes: number; width: number | null; height: number | null; mime: string } | undefined {
+  const row = getDb()
+    .prepare('SELECT id, path, bytes, width, height, mime FROM images WHERE exif_json LIKE ? ORDER BY id LIMIT 1')
+    .get(`%"_hash":"${hash}"%`) as { id: number; path: string; bytes: number; width: number | null; height: number | null; mime: string } | undefined;
+  return row;
+}
+
+// legacy helpers below (kept from earlier edits)
