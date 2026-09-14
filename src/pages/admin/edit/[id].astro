@@ -979,13 +979,16 @@ const sourceUrl = `/api/images/${img.id}/source`;
         const dw = Math.max(1, Math.round(sourceImage.width * dispScale));
         const dh = Math.max(1, Math.round(sourceImage.height * dispScale));
 
-        // Backing resolution: native source resolution (no downsample).
-        const renderScale = Math.min(1, MAX_CANVAS_DIM / Math.max(sourceImage.width, sourceImage.height));
-        const bw = Math.max(1, Math.round(sourceImage.width * renderScale));
-        const bh = Math.max(1, Math.round(sourceImage.height * renderScale));
-
-        canvas.width = bw;
-        canvas.height = bh;
+        // Backing resolution = display size. This makes the canvas match
+        // CSS exactly, so there's no CSS-stage scale and no aliasing.
+        // The single downsample (source→backing) happens via drawImage with
+        // imageSmoothingQuality='high', which is GPU-filtered and much
+        // cleaner than the CSS compositor path.
+        // Trade-off: displayed canvas is at viewport size (~720x540 for a
+        // 4K source), not native. Saved edits are still full-res via the
+        // server-side render path — canvas is preview-only.
+        canvas.width = dw;
+        canvas.height = dh;
         canvas.style.width = dw + 'px';
         canvas.style.height = dh + 'px';
         // Hint the canvas blit / CSS scale to use the highest-quality resampler.
@@ -1255,16 +1258,11 @@ const sourceUrl = `/api/images/${img.id}/source`;
         }
         applyVignetteOverlay();
         draw();
-        // Show source dims + display dims so Daz can confirm the canvas is
-        // working at native resolution (capped at MAX_CANVAS_DIM).
-        // canvas.width is the backing buffer; canvas.style.width is the CSS size.
-        const cssW = canvas.style.width || canvas.width;
-        const cssH = canvas.style.height || canvas.height;
-        if (canvas.width !== sourceImage.width || canvas.height !== sourceImage.height) {
-          setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + '. Rendering ' + canvas.width + 'x' + canvas.height + ', display ' + cssW + 'x' + cssH + '.');
-        } else {
-          setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + ' at full resolution. Display ' + cssW + 'x' + cssH + '.');
-        }
+        // Display-only canvas. Source is loaded, single high-quality
+        // downsample happens at the drawImage stage. CSS shows canvas 1:1.
+        // Saved edits remain at full source resolution via the server-side
+        // render path.
+        setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + ', display ' + canvas.width + 'x' + canvas.height + '.');
       };
       sourceImage.onerror = () => setStatus('Image load failed.', true);
       sourceImage.src = sourceUrl;
