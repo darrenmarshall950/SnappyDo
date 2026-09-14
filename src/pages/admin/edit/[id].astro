@@ -850,62 +850,6 @@ const sourceUrl = `/api/images/${img.id}/source`;
       // never pure-black. Cached so we only re-blur when amount changes.
       const _sharpenCanvas = document.createElement('canvas');
       const _sharpenCtx = _sharpenCanvas.getContext('2d');
-
-      // Anti-aliasing pre-blur. The editor canvas backs at native source
-      // resolution; CSS scales it down 4-7x for display. Without pre-blur,
-      // high-frequency content (edges, fine textures) aliases under that
-      // downsample → visible jaggies that aren't in the original JPEG.
-      // We do a single 3x3 separable box blur on the source bytes once on
-      // load, cache the result, and use it for all subsequent operations.
-      // Output is sigma~0.5 softened — well below JPEG noise floor, no
-      // perceptible quality loss for save, but enough to break the aliasing.
-      const _preBlurCanvas = document.createElement('canvas');
-      const _preBlurCtx = _preBlurCanvas.getContext('2d', { willReadFrequently: true });
-      let _preBlurBuilt = false;
-      function buildPreBlur() {
-        if (_preBlurBuilt) return;
-        const w = sourceImage.naturalWidth;
-        const h = sourceImage.naturalHeight;
-        _preBlurCanvas.width = w;
-        _preBlurCanvas.height = h;
-        _preBlurCtx.imageSmoothingQuality = 'high';
-        _preBlurCtx.drawImage(sourceImage, 0, 0, w, h);
-        const img = _preBlurCtx.getImageData(0, 0, w, h);
-        const data = img.data;
-        const sw = img.width, sh = img.height;
-        // Horizontal pass into tmp
-        const tmp = new Uint8ClampedArray(data.length);
-        for (let y = 0; y < sh; y++) {
-          const row = y * sw * 4;
-          for (let x = 0; x < sw; x++) {
-            const i = row + x * 4;
-            let r = 0, g = 0, b = 0, c = 0;
-            for (let dx = -1; dx <= 1; dx++) {
-              const nx = x + dx;
-              if (nx < 0 || nx >= sw) continue;
-              const ni = row + nx * 4;
-              r += data[ni]; g += data[ni + 1]; b += data[ni + 2]; c++;
-            }
-            tmp[i] = r / c; tmp[i + 1] = g / c; tmp[i + 2] = b / c; tmp[i + 3] = data[i + 3];
-          }
-        }
-        // Vertical pass into data
-        for (let y = 0; y < sh; y++) {
-          for (let x = 0; x < sw; x++) {
-            const i = (y * sw + x) * 4;
-            let r = 0, g = 0, b = 0, c = 0;
-            for (let dy = -1; dy <= 1; dy++) {
-              const ny = y + dy;
-              if (ny < 0 || ny >= sh) continue;
-              const ni = (ny * sw + x) * 4;
-              r += tmp[ni]; g += tmp[ni + 1]; b += tmp[ni + 2]; c++;
-            }
-            data[i] = r / c; data[i + 1] = g / c; data[i + 2] = b / c; data[i + 3] = tmp[i + 3];
-          }
-        }
-        _preBlurCtx.putImageData(img, 0, 0);
-        _preBlurBuilt = true;
-      }
       let _sharpenCacheKey = -1;
       let _sharpenCacheCanvas = null;
 
@@ -1181,8 +1125,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         // Compare mode: show original, no crop mask, no filter
         if (comparing) {
-          const drawSrc = _preBlurBuilt ? _preBlurCanvas : sourceImage;
-          ctx.drawImage(drawSrc, 0, 0, canvas.width, canvas.height);
+          ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
           ctx.restore();
           return;
         }
@@ -1221,19 +1164,14 @@ const sourceUrl = `/api/images/${img.id}/source`;
         const needsFullPipeline = hasSharpen || needsPixelPass || hasFilterWork;
 
         if (!needsFullPipeline) {
-          // Fast path: identity transform, just blit pre-blurred source.
-          // Use _preBlurCanvas (anti-aliased) to avoid jaggies under CSS
-          // downsample to display size. Falls back to sourceImage if
-          // pre-blur hasn't been built (shouldn't happen but defensive).
+          // Fast path: identity transform, just blit source.
           ctx.filter = 'none';
-          const drawSrc = _preBlurBuilt ? _preBlurCanvas : sourceImage;
-          ctx.drawImage(drawSrc, 0, 0, canvas.width, canvas.height);
+          ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
         } else if (isIOS) {
           // iOS: per-pixel JS pass for sliders (since ctx.filter doesn't work
           // on canvas drawImage in WKWebView). Sharpen is also JS-only.
           ctx.filter = 'none';
-          const baseline = _preBlurBuilt ? _preBlurCanvas : sourceImage;
-          const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : baseline;
+          const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : sourceImage;
           ctx.drawImage(drawSource, 0, 0, canvas.width, canvas.height);
           if (needsPixelPass) {
             try {
@@ -1253,8 +1191,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
           // Desktop / Chromium: ctx.filter (GPU) for sliders + JS LUT after.
           const filters = computeFilters();
           ctx.filter = filters;
-          const baseline = _preBlurBuilt ? _preBlurCanvas : sourceImage;
-          const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : baseline;
+          const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : sourceImage;
           ctx.drawImage(drawSource, 0, 0, canvas.width, canvas.height);
           ctx.filter = 'none';
           if (hasLut) {
@@ -1312,11 +1249,6 @@ const sourceUrl = `/api/images/${img.id}/source`;
       sourceImage.onload = () => {
         fitCanvasToArea();
         _sharpenCacheKey = -1; // invalidate any stale sharpen cache
-        _preBlurBuilt = false;   // rebuild for new source
-        // Build pre-blur off the main thread path. Synchronous but ~150ms
-        // for 4K — acceptable as one-time cost on load. The first draw
-        // call below will use the pre-blurred source.
-        try { buildPreBlur(); } catch (e) { console.warn('pre-blur failed:', e); }
         if (_resetOnLoad) {
           _resetOnLoad = false;
           resetAllStateAndUi();
