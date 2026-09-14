@@ -195,12 +195,74 @@ const sourceUrl = `/api/images/${img.id}/source`;
         max-height: 100%;
         line-height: 0;
       }
+      /* When zoomed, canvas-wrap becomes a viewport that may scroll
+         (or we pan the canvas via JS). Position canvas absolutely so
+         pan offsets translate correctly. */
+      .canvas-wrap.zoomed {
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        position: relative;
+      }
+      .canvas-wrap.zoomed canvas#preview {
+        position: absolute;
+        cursor: grab;
+        max-width: none;
+        max-height: none;
+        object-fit: none;
+      }
+      .canvas-wrap.zoomed canvas#preview:active {
+        cursor: grabbing;
+      }
       canvas#preview {
         max-width: 100%;
         max-height: calc(100vh - 56px);
         object-fit: contain;
         cursor: crosshair;
         display: block;
+      }
+      .zoom-controls {
+        position: absolute;
+        bottom: 1rem;
+        right: 1rem;
+        display: flex;
+        gap: 0.25rem;
+        background: rgba(10, 10, 10, 0.78);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.25rem;
+        backdrop-filter: blur(6px);
+        z-index: 5;
+      }
+      .zoom-controls button {
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--text);
+        padding: 0.35rem 0.7rem;
+        font-size: 0.75rem;
+        font-family: inherit;
+        cursor: pointer;
+        border-radius: 5px;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+      }
+      .zoom-controls button:hover {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.08);
+      }
+      .zoom-controls button.active {
+        background: var(--accent-bg);
+        color: var(--accent-fg);
+      }
+      .zoom-controls .zoom-hint {
+        padding: 0.35rem 0.6rem;
+        font-size: 0.6875rem;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        align-self: center;
+        margin-left: 0.25rem;
+        border-left: 1px solid var(--border);
+        padding-left: 0.6rem;
       }
       .vignette-overlay {
         position: absolute;
@@ -553,11 +615,18 @@ const sourceUrl = `/api/images/${img.id}/source`;
       </header>
 
       <div class="canvas-area">
-        <div class="canvas-wrap">
+        <div class="canvas-wrap" id="canvas-wrap">
           <canvas id="preview"></canvas>
           <div id="vignette-overlay" class="vignette-overlay"></div>
           <div id="crop-overlay"></div>
           <div class="canvas-hint">Drag on the image to set a crop · Sliders adjust live · Save to bake it in</div>
+        </div>
+        <div class="zoom-controls" role="toolbar" aria-label="Zoom controls">
+          <button data-zoom="fit" class="active" title="Fit to viewport">Fit</button>
+          <button data-zoom="100" title="Actual size (1 source pixel per CSS pixel)">100%</button>
+          <button data-zoom="200" title="2x zoom (click+drag to pan)">200%</button>
+          <button data-zoom="400" title="4x zoom (click+drag to pan)">400%</button>
+          <span class="zoom-hint" id="zoom-hint">⌘/Ctrl+wheel</span>
         </div>
       </div>
 
@@ -968,29 +1037,92 @@ const sourceUrl = `/api/images/${img.id}/source`;
       // of this for the 'just looking' case.
       const MAX_CANVAS_DIM = 16384;  // effectively no cap; covers any sane camera
 
+      // Zoom state. 'fit' = current behaviour (backing matches display size,
+      // no jaggies). 100/200/400 = backing = source * (zoom/100), CSS-sized
+      // the same, canvas positioned absolutely with pan offsets for panning.
+      // Persisted per-image via URL hash (#z=fit or #z=100 etc.).
+      let zoomMode = 'fit';
+      let panX = 0, panY = 0;
+      const ZOOM_STORAGE_KEY = 'snappydo:zoom:';
+
+      function loadZoomFromHash() {
+        try {
+          const m = location.hash.match(/z=(fit|100|200|400)/);
+          if (m) return m[1];
+          const saved = localStorage.getItem(ZOOM_STORAGE_KEY + imageId);
+          if (saved && ['fit', '100', '200', '400'].includes(saved)) return saved;
+        } catch (e) { /* localStorage may be blocked */ }
+        return 'fit';
+      }
+      function saveZoom(mode) {
+        try { localStorage.setItem(ZOOM_STORAGE_KEY + imageId, mode); } catch (e) {}
+        // Also reflect in URL hash so it's shareable / survives reload.
+        if (mode === 'fit') {
+          history.replaceState(null, '', location.pathname);
+        } else {
+          history.replaceState(null, '', location.pathname + '#z=' + mode);
+        }
+      }
+
+      function setZoom(mode, opts) {
+        if (!['fit', '100', '200', '400'].includes(mode)) return;
+        zoomMode = mode;
+        saveZoom(mode);
+        // Reset pan when switching modes (zoom-to-fit starts centred).
+        panX = 0; panY = 0;
+        // Update toolbar active state
+        document.querySelectorAll('.zoom-controls button').forEach(b => {
+          b.classList.toggle('active', b.dataset.zoom === mode);
+        });
+        // Toggle canvas-wrap zoomed class so CSS positions the canvas absolutely.
+        const wrap = document.getElementById('canvas-wrap');
+        if (wrap) wrap.classList.toggle('zoomed', mode !== 'fit');
+        fitCanvasToArea();
+        draw();
+        if (!opts || !opts.silent) {
+          const ztxt = mode === 'fit' ? 'fit-to-screen' : mode + '%';
+          setStatus('Zoom: ' + ztxt + '.');
+        }
+      }
+
       function fitCanvasToArea() {
         const area = document.querySelector('.canvas-area');
         const aw = area ? area.clientWidth : window.innerWidth;
         const ah = area ? area.clientHeight : window.innerHeight;
         if (!sourceImage.width) return;
 
-        // Display size: scale to fit viewport, capped at 1.0 (never upscale).
-        const dispScale = Math.min(aw / sourceImage.width, ah / sourceImage.height, 1);
-        const dw = Math.max(1, Math.round(sourceImage.width * dispScale));
-        const dh = Math.max(1, Math.round(sourceImage.height * dispScale));
-
-        // Backing resolution = display size. This makes the canvas match
-        // CSS exactly, so there's no CSS-stage scale and no aliasing.
-        // The single downsample (source→backing) happens via drawImage with
-        // imageSmoothingQuality='high', which is GPU-filtered and much
-        // cleaner than the CSS compositor path.
-        // Trade-off: displayed canvas is at viewport size (~720x540 for a
-        // 4K source), not native. Saved edits are still full-res via the
-        // server-side render path — canvas is preview-only.
-        canvas.width = dw;
-        canvas.height = dh;
-        canvas.style.width = dw + 'px';
-        canvas.style.height = dh + 'px';
+        let bw, bh;
+        if (zoomMode === 'fit') {
+          // Fit-to-viewport (default). Backing = display size, no CSS-stage
+          // scale, no aliasing (commit 0dfc143).
+          const dispScale = Math.min(aw / sourceImage.width, ah / sourceImage.height, 1);
+          bw = Math.max(1, Math.round(sourceImage.width * dispScale));
+          bh = Math.max(1, Math.round(sourceImage.height * dispScale));
+          canvas.style.left = '';
+          canvas.style.top = '';
+        } else {
+          // Pixel-peep mode. Backing = source * zoom/100, CSS-sized the
+          // same. Canvas positioned absolutely with pan offsets. When
+          // zoomed past viewport, user pans to view different regions.
+          const z = parseInt(zoomMode, 10) / 100;
+          bw = Math.max(1, Math.round(sourceImage.width * z));
+          bh = Math.max(1, Math.round(sourceImage.height * z));
+          // Centre on first zoom-in.
+          if (panX === 0 && panY === 0) {
+            panX = Math.round((aw - bw) / 2);
+            panY = Math.round((ah - bh) / 2);
+          } else {
+            // Clamp pan so we don't lose the canvas off-screen entirely.
+            panX = Math.max(Math.min(panX, 32), Math.min(aw - bw - 32, 0));
+            panY = Math.max(Math.min(panY, 32), Math.min(ah - bh - 32, 0));
+          }
+          canvas.style.left = panX + 'px';
+          canvas.style.top = panY + 'px';
+        }
+        canvas.width = bw;
+        canvas.height = bh;
+        canvas.style.width = bw + 'px';
+        canvas.style.height = bh + 'px';
         // Hint the canvas blit / CSS scale to use the highest-quality resampler.
         if (ctx.imageSmoothingQuality !== undefined) {
           ctx.imageSmoothingEnabled = true;
@@ -1262,10 +1394,66 @@ const sourceUrl = `/api/images/${img.id}/source`;
         // downsample happens at the drawImage stage. CSS shows canvas 1:1.
         // Saved edits remain at full source resolution via the server-side
         // render path.
-        setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + ', display ' + canvas.width + 'x' + canvas.height + '.');
+        const zoomTxt = zoomMode === 'fit' ? '' : ' (' + zoomMode + '%)';
+        setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + ', display ' + canvas.width + 'x' + canvas.height + zoomTxt + '.');
       };
       sourceImage.onerror = () => setStatus('Image load failed.', true);
       sourceImage.src = sourceUrl;
+
+      // ---- Zoom controls ----
+      // Restore zoom from URL hash / localStorage on load.
+      zoomMode = loadZoomFromHash();
+      // Reflect zoom state in toolbar UI after DOM is ready.
+      setZoom(zoomMode, { silent: true });
+
+      document.querySelectorAll('.zoom-controls button').forEach(btn => {
+        btn.addEventListener('click', () => setZoom(btn.dataset.zoom));
+      });
+
+      // Ctrl/⌘ + wheel: cycle through zoom levels.
+      const ZOOM_ORDER = ['fit', '100', '200', '400'];
+      const areaEl = document.querySelector('.canvas-area');
+      if (areaEl) {
+        areaEl.addEventListener('wheel', (e) => {
+          if (!(e.ctrlKey || e.metaKey)) return;
+          e.preventDefault();
+          let idx = ZOOM_ORDER.indexOf(zoomMode);
+          if (idx < 0) idx = 0;
+          if (e.deltaY < 0) idx = Math.min(idx + 1, ZOOM_ORDER.length - 1);
+          else idx = Math.max(idx - 1, 0);
+          setZoom(ZOOM_ORDER[idx]);
+        }, { passive: false });
+      }
+
+      // Click-and-drag pan when zoomed past viewport. Drag from the canvas
+      // itself (not the crop overlay / vignette, which have their own
+      // semantics) and not when in compare mode.
+      let dragging = false;
+      let dragStartX = 0, dragStartY = 0;
+      let panStartX = 0, panStartY = 0;
+      canvas.addEventListener('mousedown', (e) => {
+        if (zoomMode === 'fit') return;
+        if (e.button !== 0) return;
+        dragging = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        panStartX = panX;
+        panStartY = panY;
+        e.preventDefault();
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        panX = panStartX + (e.clientX - dragStartX);
+        panY = panStartY + (e.clientY - dragStartY);
+        // Clamp so canvas doesn't slide entirely off-screen.
+        const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
+        const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
+        panX = Math.max(Math.min(panX, 32), Math.min(aw - canvas.width - 32, 0));
+        panY = Math.max(Math.min(panY, 32), Math.min(ah - canvas.height - 32, 0));
+        canvas.style.left = panX + 'px';
+        canvas.style.top = panY + 'px';
+      });
+      window.addEventListener('mouseup', () => { dragging = false; });
 
       // ---- Presets + LUTs ----
       const PRESET_SLIDER_KEYS = ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette','lut_intensity', ...RAW_KEYS];
