@@ -943,16 +943,34 @@ const sourceUrl = `/api/images/${img.id}/source`;
       // Sharpen is now handled via getSharpenedSource() below — unsharp-mask
       // in plain Canvas 2D pixel ops, no SVG filter dependency.
 
+      // Maximum canvas backing buffer dimension. Above this, the per-pixel
+      // pipeline (sharpen + sliders + LUT) gets sluggish. 4096 covers any
+      // typical camera JPEG/JPG export and stays under ~33M pixels (4K).
+      // Below this, render at native source resolution so the editor sees
+      // what the camera/RAW saw.
+      const MAX_CANVAS_DIM = 4096;
+
       function fitCanvasToArea() {
         const area = document.querySelector('.canvas-area');
         const aw = area ? area.clientWidth : window.innerWidth;
         const ah = area ? area.clientHeight : window.innerHeight;
         if (!sourceImage.width) return;
-        const scale = Math.min(aw / sourceImage.width, ah / sourceImage.height, 1);
-        const dw = Math.max(1, Math.round(sourceImage.width * scale));
-        const dh = Math.max(1, Math.round(sourceImage.height * scale));
-        canvas.width = dw;
-        canvas.height = dh;
+
+        // Display size: scale to fit viewport, capped at 1.0 (never upscale).
+        const dispScale = Math.min(aw / sourceImage.width, ah / sourceImage.height, 1);
+        const dw = Math.max(1, Math.round(sourceImage.width * dispScale));
+        const dh = Math.max(1, Math.round(sourceImage.height * dispScale));
+
+        // Backing resolution: native source resolution, capped at MAX_CANVAS_DIM.
+        // The browser handles the CSS downsample (e.g. 6000 -> 1200 CSS px) with
+        // high-quality scaling — much sharper than drawImage at a downsampled
+        // backing buffer.
+        const renderScale = Math.min(1, MAX_CANVAS_DIM / Math.max(sourceImage.width, sourceImage.height));
+        const bw = Math.max(1, Math.round(sourceImage.width * renderScale));
+        const bh = Math.max(1, Math.round(sourceImage.height * renderScale));
+
+        canvas.width = bw;
+        canvas.height = bh;
         canvas.style.width = dw + 'px';
         canvas.style.height = dh + 'px';
       }
@@ -1145,7 +1163,16 @@ const sourceUrl = `/api/images/${img.id}/source`;
         }
         applyVignetteOverlay();
         draw();
-        setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + '. Display ' + canvas.width + 'x' + canvas.height + '.');
+        // Show source dims + display dims so Daz can confirm the canvas is
+        // working at native resolution (capped at MAX_CANVAS_DIM).
+        // canvas.width is the backing buffer; canvas.style.width is the CSS size.
+        const cssW = canvas.style.width || canvas.width;
+        const cssH = canvas.style.height || canvas.height;
+        if (canvas.width !== sourceImage.width || canvas.height !== sourceImage.height) {
+          setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + '. Rendering ' + canvas.width + 'x' + canvas.height + ', display ' + cssW + 'x' + cssH + '.');
+        } else {
+          setStatus('Loaded ' + sourceImage.width + 'x' + sourceImage.height + ' at full resolution. Display ' + cssW + 'x' + cssH + '.');
+        }
       };
       sourceImage.onerror = () => setStatus('Image load failed.', true);
       sourceImage.src = sourceUrl;
