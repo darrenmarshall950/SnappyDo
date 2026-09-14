@@ -769,6 +769,14 @@ const sourceUrl = `/api/images/${img.id}/source`;
         statusEl.classList.add('error');
         throw new Error('no 2d ctx');
       }
+      // Highest-quality resampling for any drawImage() downsample. Browser
+      // default varies (Chrome=low, Firefox=medium); we explicitly want high
+      // because Daz's editor renders at native source res and CSS-scales to
+      // display — the canvas blit shouldn't introduce bilinear softness.
+      ctx.imageSmoothingEnabled = true;
+      if ('imageSmoothingQuality' in ctx) {
+        ctx.imageSmoothingQuality = 'high';
+      }
 
       const state = { ...initialParams };
       // Lookup from LUT id → parsed { size, data: Uint8Array }
@@ -945,12 +953,20 @@ const sourceUrl = `/api/images/${img.id}/source`;
       // Sharpen is now handled via getSharpenedSource() below — unsharp-mask
       // in plain Canvas 2D pixel ops, no SVG filter dependency.
 
-      // Maximum canvas backing buffer dimension. Above this, the per-pixel
-      // pipeline (sharpen + sliders + LUT) gets sluggish. 4096 covers any
-      // typical camera JPEG/JPG export and stays under ~33M pixels (4K).
-      // Below this, render at native source resolution so the editor sees
-      // what the camera/RAW saw.
-      const MAX_CANVAS_DIM = 4096;
+      // Maximum canvas backing buffer dimension. We render at NATIVE source
+      // resolution always — never downsample at the canvas blit stage, because
+      // browser drawImage's bilinear downsample loses detail before CSS gets
+      // a chance to do its high-quality GPU downsample for display. The
+      // browser's CSS compositor is much better at the final downsample than
+      // canvas drawImage is at mid-res resampling.
+      //
+      // Trade-off: the per-pixel pipeline (sharpen + LUT) runs at native res.
+      // For a 6000x4000 source that's ~24M pixels; desktop CPU handles the
+      // slider pass at ~200-500ms/frame, sharpen cache first build at ~1-2s,
+      // trilinear LUT apply at ~500-800ms. iOS Safari at native res = ~1-2s
+      // per slider touch — sluggish but functional. The fast path skips all
+      // of this for the 'just looking' case.
+      const MAX_CANVAS_DIM = 16384;  // effectively no cap; covers any sane camera
 
       function fitCanvasToArea() {
         const area = document.querySelector('.canvas-area');
@@ -963,10 +979,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
         const dw = Math.max(1, Math.round(sourceImage.width * dispScale));
         const dh = Math.max(1, Math.round(sourceImage.height * dispScale));
 
-        // Backing resolution: native source resolution, capped at MAX_CANVAS_DIM.
-        // The browser handles the CSS downsample (e.g. 6000 -> 1200 CSS px) with
-        // high-quality scaling — much sharper than drawImage at a downsampled
-        // backing buffer.
+        // Backing resolution: native source resolution (no downsample).
         const renderScale = Math.min(1, MAX_CANVAS_DIM / Math.max(sourceImage.width, sourceImage.height));
         const bw = Math.max(1, Math.round(sourceImage.width * renderScale));
         const bh = Math.max(1, Math.round(sourceImage.height * renderScale));
@@ -975,6 +988,11 @@ const sourceUrl = `/api/images/${img.id}/source`;
         canvas.height = bh;
         canvas.style.width = dw + 'px';
         canvas.style.height = dh + 'px';
+        // Hint the canvas blit / CSS scale to use the highest-quality resampler.
+        if (ctx.imageSmoothingQuality !== undefined) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+        }
       }
 
       // Apply LUT in pixel space (RGBA buffer in place). Shared by
