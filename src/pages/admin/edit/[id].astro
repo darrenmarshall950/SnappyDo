@@ -795,16 +795,18 @@ const sourceUrl = `/api/images/${img.id}/source`;
       function computeFilters() {
         const s = state;
         const f = [];
-        // Exposure (-200..200) — divide by 100 = stops
+        // Exposure (-200..200) — divide by 100 = stops. Only push if non-zero;
+        // neutral (1.000) still triggers a GPU filter pass which can introduce
+        // sub-LSB rounding over many passes.
         const exposureStops = s.exposure / 100;
-        const expBrightness = Math.pow(2, exposureStops);  // 0.25..4
-        f.push('brightness(' + expBrightness.toFixed(3) + ')');
-        // Contrast (-100..100) — 0 = neutral, +/- = contrast change
-        f.push('contrast(' + (100 + s.contrast) + '%)');
-        // Saturation (-100..100)
-        f.push('saturate(' + (100 + s.saturation) + '%)');
-        // Brightness (-100..100) additive on top of exposure
-        f.push('brightness(' + (100 + s.brightness) + '%)');
+        const expBrightness = Math.pow(2, exposureStops);  // 1 at 0, ~0.25..4 otherwise
+        if (s.exposure !== 0) f.push('brightness(' + expBrightness.toFixed(3) + ')');
+        // Contrast (-100..100) — 0 = neutral, +/- = contrast change. Skip if 0.
+        if (s.contrast !== 0) f.push('contrast(' + (100 + s.contrast) + '%)');
+        // Saturation (-100..100) — skip if 0.
+        if (s.saturation !== 0) f.push('saturate(' + (100 + s.saturation) + '%)');
+        // Brightness (-100..100) additive on top of exposure. Skip if 0.
+        if (s.brightness !== 0) f.push('brightness(' + (100 + s.brightness) + '%)');
         // WB Temp (-100..100): warmer (positive) = sepia-ish; cooler = hue-rotate -ve
         if (s.temp > 0) f.push('sepia(' + Math.min(100, s.temp * 40) + '%)');
         else if (s.temp < 0) f.push('hue-rotate(' + Math.max(-180, s.temp * 30) + 'deg)');
@@ -977,20 +979,70 @@ const sourceUrl = `/api/images/${img.id}/source`;
 
       // Apply LUT in pixel space (RGBA buffer in place). Shared by
       // desktop (post-ctx.filter) and iOS (per-pixel pipeline).
+      //
+      // Trilinear interpolation: for each input RGB, float-coords into the
+      // 3D LUT cube, sample 8 corner cells, blend by (1-dx)(1-dy)(1-dz)
+      // weights. Smooth gradients across the cube instead of nearest-cell
+      // stair-stepping. Costs ~8x the memory reads but output stays in 8-bit
+      // (final `.5 | 0` quantize). For 4K canvas = ~88M lookups, ~250ms on
+      // desktop, ~1s on iOS Safari — acceptable.
       function applyLutToRgba(lut, data, mix) {
         const size = lut.size;
         const lutData = lut.data;
         const fs = size - 1;
+        // 256 / (size-1) maps uint8 [0..255] to float [0..size-1].
+        const inv = fs / 255;
         for (let i = 0; i < data.length; i += 4) {
           const r = data[i], g = data[i + 1], b = data[i + 2];
-          const rr = (r * fs / 255) | 0;
-          const gg = (g * fs / 255) | 0;
-          const bb = (b * fs / 255) | 0;
-          const ii = ((bb * size + gg) * size + rr) * 3;
-          const ro = lutData[ii], go = lutData[ii + 1], bo = lutData[ii + 2];
-          data[i]     = (r * (1 - mix) + ro * mix) | 0;
-          data[i + 1] = (g * (1 - mix) + go * mix) | 0;
-          data[i + 2] = (b * (1 - mix) + bo * mix) | 0;
+          // Float position in cube space
+          const rf = r * inv;
+          const gf = g * inv;
+          const bf = b * inv;
+          // Lower cube corner
+          const r0 = rf | 0, g0 = gf | 0, b0 = bf | 0;
+          const r1 = Math.min(size - 1, r0 + 1);
+          const g1 = Math.min(size - 1, g0 + 1);
+          const b1 = Math.min(size - 1, b0 + 1);
+          // Sub-cell interpolation weights
+          const dr = rf - r0;
+          const dg = gf - g0;
+          const db = bf - b0;
+          // Sample 8 corners (still 8-bit values). Index = ((b*size+g)*size+r)*3.
+          const i000 = ((b0 * size + g0) * size + r0) * 3;
+          const i100 = ((b0 * size + g0) * size + r1) * 3;
+          const i010 = ((b0 * size + g1) * size + r0) * 3;
+          const i110 = ((b0 * size + g1) * size + r1) * 3;
+          const i001 = ((b1 * size + g0) * size + r0) * 3;
+          const i101 = ((b1 * size + g0) * size + r1) * 3;
+          const i011 = ((b1 * size + g1) * size + r0) * 3;
+          const i111 = ((b1 * size + g1) * size + r1) * 3;
+          // Trilinear blend (lerp each channel independently)
+          const w000 = (1 - dr) * (1 - dg) * (1 - db);
+          const w100 = dr       * (1 - dg) * (1 - db);
+          const w010 = (1 - dr) * dg       * (1 - db);
+          const w110 = dr       * dg       * (1 - db);
+          const w001 = (1 - dr) * (1 - dg) * db;
+          const w101 = dr       * (1 - dg) * db;
+          const w011 = (1 - dr) * dg       * db;
+          const w111 = dr       * dg       * db;
+          // Float output (still uint8-channel-space, no quantize yet)
+          const ro = lutData[i000]     * w000 + lutData[i100]     * w100 +
+                     lutData[i010]     * w010 + lutData[i110]     * w110 +
+                     lutData[i001]     * w001 + lutData[i101]     * w101 +
+                     lutData[i011]     * w011 + lutData[i111]     * w111;
+          const go = lutData[i000 + 1] * w000 + lutData[i100 + 1] * w100 +
+                     lutData[i010 + 1] * w010 + lutData[i110 + 1] * w110 +
+                     lutData[i001 + 1] * w001 + lutData[i101 + 1] * w101 +
+                     lutData[i011 + 1] * w011 + lutData[i111 + 1] * w111;
+          const bo = lutData[i000 + 2] * w000 + lutData[i100 + 2] * w100 +
+                     lutData[i010 + 2] * w010 + lutData[i110 + 2] * w110 +
+                     lutData[i001 + 2] * w001 + lutData[i101 + 2] * w101 +
+                     lutData[i011 + 2] * w011 + lutData[i111 + 2] * w111;
+          // Mix with original at slider intensity
+          const imix = 1 - mix;
+          data[i]     = (r * imix + ro * mix + 0.5) | 0;
+          data[i + 1] = (g * imix + go * mix + 0.5) | 0;
+          data[i + 2] = (b * imix + bo * mix + 0.5) | 0;
         }
       }
 
@@ -1075,34 +1127,56 @@ const sourceUrl = `/api/images/${img.id}/source`;
           ctx.rect(cx, cy, cw, ch);
           ctx.clip();
         }
-        // === Pipeline branch ===
-        // Desktop / Chromium Android: ctx.filter (GPU, ~5ms per tick).
-        // iOS Safari / WKWebView: ctx.filter silently fails on canvas drawImage
-        // in many iOS versions, so we apply slider math + LUT as per-pixel
-        // JS passes instead (slower on iPhone, but functional).
-        if (isIOS) {
+        // === Pipeline ===
+        // First, decide what we need:
+        //  - noLut / noSharpen / noSliders → fast path: just draw the source
+        //    image directly with no filter chain and no JS pixel passes.
+        //    This is the "just looking at the image" case and needs to be
+        //    pixel-perfect against the source bytes.
+        //  - Otherwise: GPU ctx.filter for sliders (desktop) or per-pixel JS
+        //    for iOS, then apply LUT separately after.
+        const hasSliderWork = isIOS && (
+          state.exposure !== 0 || state.contrast !== 0 || state.brightness !== 0 ||
+          state.saturation !== 0 || state.temp !== 0 || state.tint !== 0
+        );
+        const hasSharpen = state.sharpen > 0;
+        const hasLut = !!(activeLut && state.lut_id && state.lut_intensity > 0);
+        const hasFilterWork = !isIOS && computeFilters() !== '';
+        const needsPixelPass = hasSliderWork || hasLut;
+        const needsFullPipeline = hasSharpen || needsPixelPass || hasFilterWork;
+
+        if (!needsFullPipeline) {
+          // Fast path: identity transform, just blit source.
           ctx.filter = 'none';
-          const sharpenSource = (state.sharpen > 0) ? getSharpenedSource(state.sharpen) : sourceImage;
-          ctx.drawImage(sharpenSource, 0, 0, canvas.width, canvas.height);
-          try {
-            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const data = imgData.data;
-            applySlidersToRgba(data, state);
-            if (activeLut && state.lut_id && state.lut_intensity > 0) {
-              const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
-              applyLutToRgba(activeLut, data, mix);
+          ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+        } else if (isIOS) {
+          // iOS: per-pixel JS pass for sliders (since ctx.filter doesn't work
+          // on canvas drawImage in WKWebView). Sharpen is also JS-only.
+          ctx.filter = 'none';
+          const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : sourceImage;
+          ctx.drawImage(drawSource, 0, 0, canvas.width, canvas.height);
+          if (needsPixelPass) {
+            try {
+              const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              const data = imgData.data;
+              if (hasSliderWork) applySlidersToRgba(data, state);
+              if (hasLut) {
+                const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
+                applyLutToRgba(activeLut, data, mix);
+              }
+              ctx.putImageData(imgData, 0, 0);
+            } catch (e) {
+              console.warn('iOS pixel pass failed:', e);
             }
-            ctx.putImageData(imgData, 0, 0);
-          } catch (e) {
-            console.warn('iOS pixel pass failed:', e);
           }
         } else {
-          // Desktop / Chromium: ctx.filter + LUT pass.
-          ctx.filter = computeFilters();
-          const drawSource = (state.sharpen > 0) ? getSharpenedSource(state.sharpen) : sourceImage;
+          // Desktop / Chromium: ctx.filter (GPU) for sliders + JS LUT after.
+          const filters = computeFilters();
+          ctx.filter = filters;
+          const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : sourceImage;
           ctx.drawImage(drawSource, 0, 0, canvas.width, canvas.height);
           ctx.filter = 'none';
-          if (activeLut && state.lut_id && state.lut_intensity > 0) {
+          if (hasLut) {
             try {
               const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
               const data = imgData.data;
