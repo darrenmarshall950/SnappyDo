@@ -1601,6 +1601,10 @@ const sourceUrl = `/api/images/${img.id}/source`;
           sharpen: state.sharpen,
           lut_intensity: state.lut_intensity,
           vignette: state.vignette,
+          highlights: state.highlights,
+          shadows: state.shadows,
+          whites: state.whites,
+          blacks: state.blacks,
         });
         webglPipeline.render();
         return true;

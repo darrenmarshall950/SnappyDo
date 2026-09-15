@@ -77,6 +77,10 @@ uniform float uTemp;           // -100..100, warm/cool tint (R-/B+ or R+/B-)
 uniform float uTint;           // -100..100, magenta/green tint
 uniform float uVignette;       // 0..1 (normalized from 0..100 slider)
 uniform vec2 uTexSize;         // canvas pixel dims for vignette math
+uniform float uHighlights;      // -100..100 — lift (>0) or compress (<0) the top end
+uniform float uShadows;         // -100..100 — lift (>0) or crush (<0) the bottom end
+uniform float uWhites;          // -100..100 — push values near 1.0 (>0 brighten) or back (<0)
+uniform float uBlacks;          // -100..100 — push values near 0 (<0 crush) or lift (>0)
 
 // Vignette: matches server-side sharp pipeline exactly so live preview
 // equals saved output. vUv is in [0,1] across the canvas; we convert to
@@ -130,9 +134,45 @@ vec3 applySliders(vec3 c, vec2 uv) {
   return clamp(c, 0.0, 1.0);
 }
 
+// Tone curve adjustments. All 4 sliders act on per-channel luma.
+// Highlights: >0 lifts values near 1.0 toward white (and compresses range);
+//             <0 pulls values near 0.7 down (compresses highlights).
+// Shadows:    >0 lifts values near 0.0 (opens shadows); <0 crushes them.
+// Whites:     >0 pushes values above ~0.7 toward 1.0 (clip whites);
+//             <0 pulls values below 1.0 back (de-emphasise whites).
+// Blacks:     <0 crushes values below ~0.3 toward 0.0 (deeper blacks);
+//             >0 lifts values near 0.0 back (open blacks).
+//
+// Each slider is normalised to [-1, +1] from a [-100, +100] slider.
+vec3 applyTone(vec3 c) {
+  float h = uHighlights / 100.0;
+  float s = uShadows / 100.0;
+  float w = uWhites / 100.0;
+  float b = uBlacks / 100.0;
+  // Per-channel pass for R, G, B independently.
+  for (int i = 0; i < 3; i++) {
+    float v = c[i];
+    // Highlights — smoothstep around 0.5..1.0, lift or compress
+    float hi = smoothstep(0.5, 1.0, v);
+    v += h * hi * 0.3;
+    // Shadows — smoothstep around 0.0..0.5
+    float sh = 1.0 - smoothstep(0.0, 0.5, v);
+    v += s * sh * 0.3;
+    // Whites — strong effect on near-1.0 values
+    float wt = smoothstep(0.7, 1.0, v);
+    v += w * wt * 0.25;
+    // Blacks — strong effect on near-0.0 values
+    float bk = 1.0 - smoothstep(0.0, 0.3, v);
+    v += b * bk * 0.25;
+    c[i] = clamp(v, 0.0, 1.0);
+  }
+  return c;
+}
+
 void main() {
   vec3 src = texture(uSource, vUv).rgb;
   vec3 adjusted = applySliders(src, vUv);
+  adjusted = applyTone(adjusted);
   // Sample 3D LUT. Clamp to ensure 0..1 even after slider overshoot,
   // since LUT cube indices are 0..size-1.
   vec3 clamped = clamp(adjusted, 0.0, 1.0);
@@ -467,6 +507,10 @@ function createWebGLPipeline() {
       lut_id: state.lut_id || 0,
       lut_intensity: state.lut_intensity || 0,
       vignette: state.vignette || 0,
+      highlights: state.highlights || 0,
+      shadows: state.shadows || 0,
+      whites: state.whites || 0,
+      blacks: state.blacks || 0,
     });
   }
 
@@ -560,6 +604,10 @@ function createWebGLPipeline() {
       gl.uniform1f(gl.getUniformLocation(p, 'uVignette'),
         Math.max(0, Math.min(1, lastState.vignette / 100)));
       gl.uniform2f(gl.getUniformLocation(p, 'uTexSize'), w, h);
+      gl.uniform1f(gl.getUniformLocation(p, 'uHighlights'), lastState.highlights);
+      gl.uniform1f(gl.getUniformLocation(p, 'uShadows'), lastState.shadows);
+      gl.uniform1f(gl.getUniformLocation(p, 'uWhites'), lastState.whites);
+      gl.uniform1f(gl.getUniformLocation(p, 'uBlacks'), lastState.blacks);
     }, null, w, h);
 
     gl.bindVertexArray(null);
