@@ -1455,6 +1455,141 @@ const sourceUrl = `/api/images/${img.id}/source`;
       });
       window.addEventListener('mouseup', () => { dragging = false; });
 
+      // ---- Mobile: one-finger pan + two-finger pinch-zoom ----
+      // One finger when zoomed = pan (mirror of mouse drag).
+      // Two fingers = pinch (continuous zoom centred on pinch midpoint).
+      // State variables are shared with mouse handlers.
+      let pinchStartDist = 0;
+      let pinchStartZoomMode = 'fit';
+      let pinchStartPanX = 0;
+      let pinchStartPanY = 0;
+      let pinchMidStartX = 0;
+      let pinchMidStartY = 0;
+
+      function touchDist(a, b) {
+        const dx = a.clientX - b.clientX;
+        const dy = a.clientY - b.clientY;
+        return Math.hypot(dx, dy);
+      }
+      function touchMid(a, b) {
+        return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
+      }
+      // Map a continuous zoom factor (1.0 = current zoom, 2.0 = double, 0.5 = half)
+      // to the nearest discrete preset (fit/100/200/400). Otherwise free-form
+      // zoom would need fractional backing-buffer sizes.
+      function continuousZoomToMode(factor) {
+        const order = ZOOM_ORDER; // ['fit', '100', '200', '400']
+        const current = zoomMode === 'fit' ? 0 : parseInt(zoomMode, 10);
+        const want = current * factor;
+        let best = order[0];
+        let bestDelta = Infinity;
+        for (const m of order) {
+          const v = m === 'fit' ? 0 : parseInt(m, 10);
+          const d = Math.abs(v - want);
+          if (d < bestDelta) { bestDelta = d; best = m; }
+        }
+        return best;
+      }
+
+      canvas.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+          // One finger: behave like mouse drag for panning when zoomed.
+          if (zoomMode === 'fit') return; // let crop handler take over
+          const t = e.touches[0];
+          dragging = true;
+          dragStartX = t.clientX;
+          dragStartY = t.clientY;
+          panStartX = panX;
+          panStartY = panY;
+        } else if (e.touches.length === 2) {
+          // Two fingers: start pinch.
+          e.preventDefault();
+          dragging = false;
+          pinchStartDist = touchDist(e.touches[0], e.touches[1]);
+          pinchStartZoomMode = zoomMode;
+          pinchStartPanX = panX;
+          pinchStartPanY = panY;
+          const mid = touchMid(e.touches[0], e.touches[1]);
+          pinchMidStartX = mid.x;
+          pinchMidStartY = mid.y;
+        }
+      }, { passive: false });
+
+      canvas.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1 && dragging) {
+          // Pan
+          e.preventDefault();
+          const t = e.touches[0];
+          panX = panStartX + (t.clientX - dragStartX);
+          panY = panStartY + (t.clientY - dragStartY);
+          const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
+          const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
+          panX = Math.max(Math.min(panX, 32), Math.min(aw - canvas.width - 32, 0));
+          panY = Math.max(Math.min(panY, 32), Math.min(ah - canvas.height - 32, 0));
+          canvas.style.left = panX + 'px';
+          canvas.style.top = panY + 'px';
+        } else if (e.touches.length === 2) {
+          // Pinch zoom
+          e.preventDefault();
+          const dist = touchDist(e.touches[0], e.touches[1]);
+          if (pinchStartDist < 1) return;
+          const factor = dist / pinchStartDist;
+          const newMode = continuousZoomToMode(factor);
+          if (newMode !== zoomMode) {
+            setZoom(newMode);
+            // setZoom resets pan to centred. Override to keep the pinch
+            // midpoint anchored under the user's fingers.
+            const mid = touchMid(e.touches[0], e.touches[1]);
+            const dx = mid.x - pinchMidStartX;
+            const dy = mid.y - pinchMidStartY;
+            panX = pinchStartPanX + dx;
+            panY = pinchStartPanY + dy;
+            const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
+            const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
+            panX = Math.max(Math.min(panX, 32), Math.min(aw - canvas.width - 32, 0));
+            panY = Math.max(Math.min(panY, 32), Math.min(ah - canvas.height - 32, 0));
+            canvas.style.left = panX + 'px';
+            canvas.style.top = panY + 'px';
+          } else {
+            // Same mode — just translate the canvas under the midpoint.
+            const mid = touchMid(e.touches[0], e.touches[1]);
+            const dx = mid.x - pinchMidStartX;
+            const dy = mid.y - pinchMidStartY;
+            panX = pinchStartPanX + dx;
+            panY = pinchStartPanY + dy;
+            const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
+            const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
+            panX = Math.max(Math.min(panX, 32), Math.min(aw - canvas.width - 32, 0));
+            panY = Math.max(Math.min(panY, 32), Math.min(ah - canvas.height - 32, 0));
+            canvas.style.left = panX + 'px';
+            canvas.style.top = panY + 'px';
+          }
+        }
+      }, { passive: false });
+
+      canvas.addEventListener('touchend', (e) => {
+        if (e.touches.length === 0) {
+          dragging = false;
+          pinchStartDist = 0;
+        } else if (e.touches.length === 1) {
+          // Dropped from two-finger pinch back to one-finger pan.
+          // Reset the pan origin to the remaining finger so subsequent
+          // drag continues smoothly from where it is, not from where the
+          // pinch started.
+          const t = e.touches[0];
+          dragging = true;
+          dragStartX = t.clientX;
+          dragStartY = t.clientY;
+          panStartX = panX;
+          panStartY = panY;
+          pinchStartDist = 0;
+        }
+      });
+      canvas.addEventListener('touchcancel', () => {
+        dragging = false;
+        pinchStartDist = 0;
+      });
+
       // ---- Presets + LUTs ----
       const PRESET_SLIDER_KEYS = ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette','lut_intensity', ...RAW_KEYS];
 
