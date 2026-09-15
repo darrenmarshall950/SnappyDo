@@ -922,6 +922,20 @@ const sourceUrl = `/api/images/${img.id}/source`;
       let _sharpenCacheKey = -1;
       let _sharpenCacheCanvas = null;
 
+      // rAF coalescing. Slider 'input' events fire 60+ times per second.
+      // Running draw() on every event oversubscribes the pipeline (especially
+      // the 250ms LUT pass on a 4K source). ScheduleDraw() collapses multiple
+      // events within a single animation frame to one draw call.
+      let _drawScheduled = false;
+      function scheduleDraw() {
+        if (_drawScheduled) return;
+        _drawScheduled = true;
+        requestAnimationFrame(() => {
+          _drawScheduled = false;
+          draw();
+        });
+      }
+
       function getSharpenedSource(amount) {
         if (!sourceImage.complete || !sourceImage.naturalWidth) return sourceImage;
         if (amount <= 0) return sourceImage;
@@ -1211,7 +1225,111 @@ const sourceUrl = `/api/images/${img.id}/source`;
         }
       }
 
-      // Per-pixel slider pass for iOS / WKWebView. Mirrors computeFilters()
+      // ---- Web Worker for LUT pass ----
+      // The trilinear LUT pass is ~250ms on a 4K source (15.8M pixels x 8
+      // cube corners). Running it on the main thread blocks input. Move it
+      // to a worker — main thread stays responsive, worker crunches pixels
+      // in the background. The bytes move via Transferable (no clone).
+      let lutWorker = null;
+      let lutWorkerToken = 0; // incremented per request, used to discard stale results
+      let lutWorkerResolve = null;
+      function ensureLutWorker() {
+        if (lutWorker) return lutWorker;
+        const code = `
+          let lutData = null;
+          let lutSize = 0;
+          self.onmessage = (e) => {
+            const msg = e.data;
+            if (msg.kind === 'lut') {
+              lutData = msg.data;
+              lutSize = msg.size;
+              return;
+            }            if (msg.kind === 'apply') {
+              if (!lutData) { self.postMessage({ kind: 'done', token: msg.token, error: 'no LUT' }); return; }
+              const data = msg.data;
+              const size = lutSize;
+              const fs = size - 1;
+              const inv = fs / 255;
+              const mix = msg.mix;
+              const imix = 1 - mix;
+              for (let i = 0; i < data.length; i += 4) {
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+                const rf = r * inv, gf = g * inv, bf = b * inv;
+                const r0 = rf | 0, g0 = gf | 0, b0 = bf | 0;
+                const r1 = Math.min(size - 1, r0 + 1);
+                const g1 = Math.min(size - 1, g0 + 1);
+                const b1 = Math.min(size - 1, b0 + 1);
+                const dr = rf - r0, dg = gf - g0, db = bf - b0;
+                const i000 = ((b0 * size + g0) * size + r0) * 3;
+                const i100 = ((b0 * size + g0) * size + r1) * 3;
+                const i010 = ((b0 * size + g1) * size + r0) * 3;
+                const i110 = ((b0 * size + g1) * size + r1) * 3;
+                const i001 = ((b1 * size + g0) * size + r0) * 3;
+                const i101 = ((b1 * size + g0) * size + r1) * 3;
+                const i011 = ((b1 * size + g1) * size + r0) * 3;
+                const i111 = ((b1 * size + g1) * size + r1) * 3;
+                const w000 = (1 - dr) * (1 - dg) * (1 - db);
+                const w100 = dr       * (1 - dg) * (1 - db);
+                const w010 = (1 - dr) * dg       * (1 - db);
+                const w110 = dr       * dg       * (1 - db);
+                const w001 = (1 - dr) * (1 - dg) * db;
+                const w101 = dr       * (1 - dg) * db;
+                const w011 = (1 - dr) * dg       * db;
+                const w111 = dr       * dg       * db;
+                const ro = lutData[i000]     * w000 + lutData[i100]     * w100 +
+                           lutData[i010]     * w010 + lutData[i110]     * w110 +
+                           lutData[i001]     * w001 + lutData[i101]     * w101 +
+                           lutData[i011]     * w011 + lutData[i111]     * w111;
+                const go = lutData[i000 + 1] * w000 + lutData[i100 + 1] * w100 +
+                           lutData[i010 + 1] * w010 + lutData[i110 + 1] * w110 +
+                           lutData[i001 + 1] * w001 + lutData[i101 + 1] * w101 +
+                           lutData[i011 + 1] * w011 + lutData[i111 + 1] * w111;
+                const bo = lutData[i000 + 2] * w000 + lutData[i100 + 2] * w100 +
+                           lutData[i010 + 2] * w010 + lutData[i110 + 2] * w110 +
+                           lutData[i001 + 2] * w001 + lutData[i101 + 2] * w101 +
+                           lutData[i011 + 2] * w011 + lutData[i111 + 2] * w111;
+                data[i]     = (r * imix + ro * mix + 0.5) | 0;
+                data[i + 1] = (g * imix + go * mix + 0.5) | 0;
+                data[i + 2] = (b * imix + bo * mix + 0.5) | 0;
+              }
+              self.postMessage({ kind: 'done', token: msg.token, data }, [data.buffer]);
+            }
+          };
+        `;
+        const blob = new Blob([code], { type: 'application/javascript' });
+        lutWorker = new Worker(URL.createObjectURL(blob));
+        lutWorker.onmessage = (e) => {
+          const msg = e.data;
+          if (msg.token !== lutWorkerToken) return; // stale
+          if (lutWorkerResolve) {
+            const resolve = lutWorkerResolve;
+            lutWorkerResolve = null;
+            if (msg.error) resolve(null);
+            else resolve(new ImageData(msg.data, canvas.width, canvas.height));
+          }
+        };
+        if (activeLut) {
+          lutWorker.postMessage({ kind: 'lut', data: activeLut.data, size: activeLut.size });
+        }
+        return lutWorker;
+      }
+      function applyLutToRgbaAsync(imgData, mix) {
+        return new Promise((resolve) => {
+          // Lazy worker init. The worker is created on first LUT use and
+          // reused for all subsequent renders.
+          const w = ensureLutWorker();
+          lutWorkerToken++;
+          lutWorkerResolve = resolve;
+          // Send a copy of the buffer so the main-thread ImageData stays
+          // intact (we want main to be free to do other things while the
+          // worker crunches). Buffer is transferred back after worker is
+          // done with it.
+          const buf = new Uint8ClampedArray(imgData.data);
+          w.postMessage({ kind: 'apply', token: lutWorkerToken, data: buf, mix }, [buf.buffer]);
+        });
+      }
+
+            // Per-pixel slider pass for iOS / WKWebView. Mirrors computeFilters()
       // semantics: exposure = multiplicative, brightness = multiplicative
       // additional, contrast = pivot at 128, saturation = luma lerp, temp/tint
       // = RGB shifts approximating sepia/hue-rotate.
@@ -1344,10 +1462,13 @@ const sourceUrl = `/api/images/${img.id}/source`;
           if (hasLut) {
             try {
               const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-              const data = imgData.data;
               const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
-              applyLutToRgba(activeLut, data, mix);
-              ctx.putImageData(imgData, 0, 0);
+              // Offload to worker. Main thread stays responsive while the
+              // worker processes pixels. Race-safe: stale tokens are
+              // discarded by the worker.
+              applyLutToRgbaAsync(imgData, mix).then((result) => {
+                if (result) ctx.putImageData(result, 0, 0);
+              });
             } catch (e) {
               console.warn('LUT pass failed:', e);
             }
@@ -1639,13 +1760,24 @@ const sourceUrl = `/api/images/${img.id}/source`;
       }
 
       async function fetchLutData(lutId) {
-        if (lutCache.has(lutId)) return lutCache.get(lutId);
+        if (lutCache.has(lutId)) {
+          const cached = lutCache.get(lutId);
+          // Push cached LUT to worker if it exists.
+          if (lutWorker) {
+            lutWorker.postMessage({ kind: 'lut', data: cached.data, size: cached.size });
+          }
+          return cached;
+        }
         const res = await fetch('/api/luts/' + lutId);
         if (!res.ok) throw new Error('failed to fetch LUT');
         const json = await res.json();
         const u8 = new Uint8Array(json.data);
         const cached = { size: json.size, data: u8 };
         lutCache.set(lutId, cached);
+        // Push new LUT to worker if it exists. Worker stays alive across LUTs.
+        if (lutWorker) {
+          lutWorker.postMessage({ kind: 'lut', data: cached.data, size: cached.size });
+        }
         return cached;
       }
 
@@ -1766,10 +1898,10 @@ const sourceUrl = `/api/images/${img.id}/source`;
           valEl.textContent = v;
           if (key === 'sharpen') {
             _sharpenCacheKey = -1; // force re-blur next draw
-            if (v > 0) getSharpenedSource(v);
+            if (v > 0) getSharpenedSource(v); // pre-warm async-ish
           }
           applyVignetteOverlay();
-          draw();
+          scheduleDraw();
         });
       });
 
