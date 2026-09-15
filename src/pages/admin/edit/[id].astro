@@ -1081,6 +1081,10 @@ const sourceUrl = `/api/images/${img.id}/source`;
       // Apply vignette overlay opacity (separate from canvas filter — vignette is a DOM overlay)
       const vignetteEl = document.getElementById('vignette-overlay');
       function applyVignetteOverlay() {
+        // In WebGL mode the shader handles vignette accurately (matching
+        // server-side save), so the DOM overlay stays hidden. In legacy
+        // (iOS) mode the DOM overlay is the preview.
+        if (useWebGL) { vignetteEl.style.opacity = '0'; return; }
         const v = Number(state.vignette) || 0;
         if (v <= 0) { vignetteEl.style.opacity = '0'; return; }
         // 0..100 → 0..0.85 opacity
@@ -1596,6 +1600,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
           tint: state.tint,
           sharpen: state.sharpen,
           lut_intensity: state.lut_intensity,
+          vignette: state.vignette,
         });
         webglPipeline.render();
         return true;

@@ -75,8 +75,37 @@ uniform float uBrightness;     // -100..100, multiplicative scale
 uniform float uSaturation;     // -100..100, 0 = grayscale at -100, +100 = 2x
 uniform float uTemp;           // -100..100, warm/cool tint (R-/B+ or R+/B-)
 uniform float uTint;           // -100..100, magenta/green tint
+uniform float uVignette;       // 0..1 (normalized from 0..100 slider)
+uniform vec2 uTexSize;         // canvas pixel dims for vignette math
 
-vec3 applySliders(vec3 c) {
+// Vignette: matches server-side sharp pipeline exactly so live preview
+// equals saved output. vUv is in [0,1] across the canvas; we convert to
+// pixel coords and normalise against the half-extents so corners land
+// at d ~= 1.0 (corners = max distance from centre, the innerStop ramps
+// so corner-stop is at d=1).
+vec3 applyVignette(vec3 c, vec2 uv) {
+  if (uVignette <= 0.0) return c;
+  vec2 px = uv * uTexSize;
+  float dx = (px.x - uTexSize.x * 0.5) / (uTexSize.x * 0.5);
+  float dy = (px.y - uTexSize.y * 0.5) / (uTexSize.y * 0.5);
+  float d = sqrt(dx * dx + dy * dy);
+  float amount = clamp(uVignette, 0.05, 0.95);
+  float innerStop = 0.30 - amount * 0.15;
+  float cornerDarken = 0.25 + amount * 0.55;
+  float v = 1.0;
+  if (d <= innerStop) {
+    v = 1.0;
+  } else if (d >= 1.0) {
+    v = 1.0 - cornerDarken;
+  } else {
+    float t = (d - innerStop) / (1.0 - innerStop);
+    float eased = t * t * (3.0 - 2.0 * t);
+    v = 1.0 - eased * cornerDarken;
+  }
+  return c * v;
+}
+
+vec3 applySliders(vec3 c, vec2 uv) {
   // Exposure (multiplicative). 2^(ev/100): ev=100 doubles, ev=-100 halves.
   c *= pow(2.0, uExposure / 100.0);
   // Brightness (multiplicative scale around 1.0).
@@ -103,7 +132,7 @@ vec3 applySliders(vec3 c) {
 
 void main() {
   vec3 src = texture(uSource, vUv).rgb;
-  vec3 adjusted = applySliders(src);
+  vec3 adjusted = applySliders(src, vUv);
   // Sample 3D LUT. Clamp to ensure 0..1 even after slider overshoot,
   // since LUT cube indices are 0..size-1.
   vec3 clamped = clamp(adjusted, 0.0, 1.0);
@@ -112,6 +141,7 @@ void main() {
   vec3 lutResult = texture(uLut, clamped).rgb;
   // Mix sliders+LUT result with the slider-only result based on intensity.
   vec3 outColor = mix(adjusted, lutResult, uLutIntensity);
+  outColor = applyVignette(outColor, vUv);
   fragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }
 `;
@@ -436,6 +466,7 @@ function createWebGLPipeline() {
       sharpen: state.sharpen || 0,
       lut_id: state.lut_id || 0,
       lut_intensity: state.lut_intensity || 0,
+      vignette: state.vignette || 0,
     });
   }
 
@@ -526,6 +557,9 @@ function createWebGLPipeline() {
       gl.uniform1f(gl.getUniformLocation(p, 'uSaturation'), lastState.saturation);
       gl.uniform1f(gl.getUniformLocation(p, 'uTemp'), lastState.temp);
       gl.uniform1f(gl.getUniformLocation(p, 'uTint'), lastState.tint);
+      gl.uniform1f(gl.getUniformLocation(p, 'uVignette'),
+        Math.max(0, Math.min(1, lastState.vignette / 100)));
+      gl.uniform2f(gl.getUniformLocation(p, 'uTexSize'), w, h);
     }, null, w, h);
 
     gl.bindVertexArray(null);
