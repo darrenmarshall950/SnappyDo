@@ -109,9 +109,10 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
   // temp > 0 = warmer (push red, pull blue). temp < 0 = cooler.
   // tint > 0 = push green, tint < 0 = push magenta.
   if (temp !== 0 || tint !== 0) {
-    const t = Math.max(-100, Math.min(100, temp));
-    const u = Math.max(-100, Math.min(100, tint));
-    const rDelta = t * 0.6;        // +/-60 per max temp
+    const t = Math.max(-200, Math.min(200, temp));
+    const u = Math.max(-200, Math.min(200, tint));
+    // ±200 = 2× prior max effect; rDelta scales to ±120 (was ±60).
+    const rDelta = t * 0.6;        // +/-120 per max temp
     const bDelta = -t * 0.6;
     const gDelta = u * 0.5;
     const base = 240;              // near-white tint base
@@ -119,7 +120,7 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
     const tintG = Math.max(180, Math.min(255, base + gDelta));
     const tintB = Math.max(180, Math.min(255, base + bDelta));
     // Mix amount — how strongly to apply the tint (rough approximation)
-    const tintMix = (Math.abs(t) + Math.abs(u)) / 100 * 0.25;  // 0..0.5
+    const tintMix = (Math.abs(t) + Math.abs(u)) / 200 * 0.25;  // 0..0.5 (max at ±200)
     if (tintMix > 0) {
       pipeline = pipeline.tint({ r: tintR, g: tintG, b: tintB }).linear(1, 0);
     }

@@ -125,10 +125,12 @@ vec3 applySliders(vec3 c, vec2 uv) {
   // Temp (warm/cool): multiplicative R/B shift, matching sharp's .tint()
   // magnitude (max ~0.15 at slider ±100). Multiplicative matches the
   // server-side save better than additive.
+  // Slider -200..+200: at ±200 = 2× prior max effect, /100 keeps scaling.
   float tempShift = uTemp / 100.0 * 0.15;
   c.r *= (1.0 + tempShift);
   c.b *= (1.0 - tempShift);
   // Tint (magenta/green): multiplicative G/R shift vs B
+  // Slider -200..+200: /100 scaling kept, so ±200 = 2× prior max.
   float tintShift = uTint / 100.0 * 0.1;
   c.r *= (1.0 + tintShift * 0.5);
   c.g *= (1.0 + tintShift * 0.5);
@@ -188,7 +190,10 @@ void main() {
 }
 `;
 
-// Fragment shader: horizontal Gaussian blur (separable, σ ≈ 1.0).
+// Fragment shader: horizontal Gaussian blur (separable, variable sigma).
+// 13 taps at offsets i*s where i ∈ [-6..6]. Pre-computed weights for the
+// integer-sigma distance decode are inline. Sum: 1 + 2*(0.6065+0.1353+0.0111+0.000335+3.7e-6+1.5e-8) ≈ 1.506
+// We normalise by that factor.
 const BLUR_H_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -196,24 +201,38 @@ out vec4 fragColor;
 
 uniform sampler2D uSource;
 uniform vec2 uTexelSize;  // (1/w, 1/h)
+uniform float uSigma;     // blur radius in texels (typically 0.5..3.5)
 
 void main() {
+  // Pre-computed normalised Gaussian weights at integer sigma-units.
+  // (raw weight / total) where total ≈ 1.506.
+  const float W0 = 0.3991;       // i=0
+  const float W1 = 0.2420;       // i=±1
+  const float W2 = 0.0540;       // i=±2
+  const float W3 = 0.0044;       // i=±3
+  const float W4 = 0.000134;     // i=±4
+  const float W5 = 0.00000149;   // i=±5
+  const float W6 = 0.0000000061; // i=±6
   vec3 sum = vec3(0.0);
-  // 9-tap Gaussian, σ ≈ 1.0
-  sum += texture(uSource, vUv + vec2(-4.0 * uTexelSize.x, 0.0)).rgb * 0.0162;
-  sum += texture(uSource, vUv + vec2(-3.0 * uTexelSize.x, 0.0)).rgb * 0.0540;
-  sum += texture(uSource, vUv + vec2(-2.0 * uTexelSize.x, 0.0)).rgb * 0.1216;
-  sum += texture(uSource, vUv + vec2(-1.0 * uTexelSize.x, 0.0)).rgb * 0.1946;
-  sum += texture(uSource, vUv                              ).rgb * 0.2270;
-  sum += texture(uSource, vUv + vec2( 1.0 * uTexelSize.x, 0.0)).rgb * 0.1946;
-  sum += texture(uSource, vUv + vec2( 2.0 * uTexelSize.x, 0.0)).rgb * 0.1216;
-  sum += texture(uSource, vUv + vec2( 3.0 * uTexelSize.x, 0.0)).rgb * 0.0540;
-  sum += texture(uSource, vUv + vec2( 4.0 * uTexelSize.x, 0.0)).rgb * 0.0162;
+  float s = uSigma * uTexelSize.x;
+  sum += texture(uSource, vUv + vec2(-6.0 * s, 0.0)).rgb * W6;
+  sum += texture(uSource, vUv + vec2(-5.0 * s, 0.0)).rgb * W5;
+  sum += texture(uSource, vUv + vec2(-4.0 * s, 0.0)).rgb * W4;
+  sum += texture(uSource, vUv + vec2(-3.0 * s, 0.0)).rgb * W3;
+  sum += texture(uSource, vUv + vec2(-2.0 * s, 0.0)).rgb * W2;
+  sum += texture(uSource, vUv + vec2(-1.0 * s, 0.0)).rgb * W1;
+  sum += texture(uSource, vUv                              ).rgb * W0;
+  sum += texture(uSource, vUv + vec2( 1.0 * s, 0.0)).rgb * W1;
+  sum += texture(uSource, vUv + vec2( 2.0 * s, 0.0)).rgb * W2;
+  sum += texture(uSource, vUv + vec2( 3.0 * s, 0.0)).rgb * W3;
+  sum += texture(uSource, vUv + vec2( 4.0 * s, 0.0)).rgb * W4;
+  sum += texture(uSource, vUv + vec2( 5.0 * s, 0.0)).rgb * W5;
+  sum += texture(uSource, vUv + vec2( 6.0 * s, 0.0)).rgb * W6;
   fragColor = vec4(sum, 1.0);
 }
 `;
 
-// Fragment shader: vertical Gaussian blur (separable, σ ≈ 1.0).
+// Fragment shader: vertical Gaussian blur (separable, variable sigma).
 const BLUR_V_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -221,18 +240,34 @@ out vec4 fragColor;
 
 uniform sampler2D uSource;
 uniform vec2 uTexelSize;
+uniform float uSigma;
 
 void main() {
-  vec3 sum = vec3(0.0);
-  sum += texture(uSource, vUv + vec2(0.0, -4.0 * uTexelSize.y)).rgb * 0.0162;
-  sum += texture(uSource, vUv + vec2(0.0, -3.0 * uTexelSize.y)).rgb * 0.0540;
-  sum += texture(uSource, vUv + vec2(0.0, -2.0 * uTexelSize.y)).rgb * 0.1216;
-  sum += texture(uSource, vUv + vec2(0.0, -1.0 * uTexelSize.y)).rgb * 0.1946;
-  sum += texture(uSource, vUv                          ).rgb * 0.2270;
-  sum += texture(uSource, vUv + vec2(0.0,  1.0 * uTexelSize.y)).rgb * 0.1946;
-  sum += texture(uSource, vUv + vec2(0.0,  2.0 * uTexelSize.y)).rgb * 0.1216;
-  sum += texture(uSource, vUv + vec2(0.0,  3.0 * uTexelSize.y)).rgb * 0.0540;
-  sum += texture(uSource, vUv + vec2(0.0,  4.0 * uTexelSize.y)).rgb * 0.0162;
+  // Pre-computed normalised Gaussian weights at integer sigma-units.
+      // Sum of raw exp(-i²/2) values across -6..6 ≈ 2.5060.
+      // Each weight below is exp(-i²/2) / 2.5060.
+      const float W0 = 0.3991;       // i=0
+      const float W1 = 0.2420;       // i=±1
+      const float W2 = 0.0540;       // i=±2
+      const float W3 = 0.0044;       // i=±3
+      const float W4 = 0.000134;     // i=±4
+      const float W5 = 0.00000149;   // i=±5
+      const float W6 = 0.0000000061; // i=±6
+      vec3 sum = vec3(0.0);
+  float s = uSigma * uTexelSize.y;
+  sum += texture(uSource, vUv + vec2(0.0, -6.0 * s)).rgb * W6;
+  sum += texture(uSource, vUv + vec2(0.0, -5.0 * s)).rgb * W5;
+  sum += texture(uSource, vUv + vec2(0.0, -4.0 * s)).rgb * W4;
+  sum += texture(uSource, vUv + vec2(0.0, -3.0 * s)).rgb * W3;
+  sum += texture(uSource, vUv + vec2(0.0, -2.0 * s)).rgb * W2;
+  sum += texture(uSource, vUv + vec2(0.0, -1.0 * s)).rgb * W1;
+  sum += texture(uSource, vUv                          ).rgb * W0;
+  sum += texture(uSource, vUv + vec2(0.0,  1.0 * s)).rgb * W1;
+  sum += texture(uSource, vUv + vec2(0.0,  2.0 * s)).rgb * W2;
+  sum += texture(uSource, vUv + vec2(0.0,  3.0 * s)).rgb * W3;
+  sum += texture(uSource, vUv + vec2(0.0,  4.0 * s)).rgb * W4;
+  sum += texture(uSource, vUv + vec2(0.0,  5.0 * s)).rgb * W5;
+  sum += texture(uSource, vUv + vec2(0.0,  6.0 * s)).rgb * W6;
   fragColor = vec4(sum, 1.0);
 }
 `;
@@ -544,7 +579,12 @@ function createWebGLPipeline() {
     // If sharpen = 0, the sliders-LUT pass reads directly from sourceTex.
     let outputTex = sourceTex;
     if (lastState.sharpen > 0 && sharpenTexA && sharpenTexB && sharpenFboA && sharpenFboB) {
-      const amount = Math.max(0, Math.min(1, lastState.sharpen / 100));
+      // Slider 0..200 — extended to give stronger max sharpening.
+      // σ: 0.5..2.3 (radius scales with slider).
+      // amount: 0..1.6 (visible at 50, strong at 100, maxed at 200).
+      const sliderAmount = lastState.sharpen;
+      const sigma = 0.5 + (sliderAmount / 200) * 1.8;
+      const amount = Math.min(1.6, (sliderAmount / 200) * 1.6);
       // Pass 1: horizontal blur of source → texA
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, sourceTex);
@@ -552,6 +592,7 @@ function createWebGLPipeline() {
         gl.uniform1i(gl.getUniformLocation(blurHProg, 'uSource'), 0);
         gl.uniform2f(gl.getUniformLocation(blurHProg, 'uTexelSize'),
           1 / sourceW, 1 / sourceH);
+        gl.uniform1f(gl.getUniformLocation(blurHProg, 'uSigma'), sigma);
       }, sharpenFboA, sourceW, sourceH);
 
       // Pass 2: vertical blur of texA → texB
@@ -560,6 +601,7 @@ function createWebGLPipeline() {
         gl.uniform1i(gl.getUniformLocation(blurVProg, 'uSource'), 0);
         gl.uniform2f(gl.getUniformLocation(blurVProg, 'uTexelSize'),
           1 / sourceW, 1 / sourceH);
+        gl.uniform1f(gl.getUniformLocation(blurVProg, 'uSigma'), sigma);
       }, sharpenFboB, sourceW, sourceH);
 
       // Pass 3: unsharp mask (source - blurredB) * amount + source → texA

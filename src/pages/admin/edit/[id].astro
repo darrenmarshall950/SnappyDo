@@ -707,7 +707,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
           </div>
           <div class="slider" data-key="temp">
             <label>Temperature</label>
-            <input type="range" min="-100" max="100" step="1" />
+            <input type="range" min="-200" max="200" step="1" />
             <span class="val">0</span>
           </div>
           <div class="slider" data-key="tint">
@@ -721,7 +721,8 @@ const sourceUrl = `/api/images/${img.id}/source`;
           <h3>Effects <button id="btn-reset-fx">reset</button></h3>
           <div class="slider" data-key="sharpen">
             <label>Sharpen</label>
-            <input type="range" min="0" max="100" step="1" />
+            <!-- Slider range 0..150: 0=off, 100=previous max, 150=strong. -->
+            <input type="range" min="0" max="200" step="1" />
             <span class="val">0</span>
           </div>
           <div class="slider" data-key="vignette">
