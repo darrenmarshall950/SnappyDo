@@ -348,14 +348,12 @@ function createWebGLPipeline() {
     sourceW = (image).naturalWidth || (image).width;
     sourceH = (image).naturalHeight || (image).height;
     window._dbgSW = sourceW; window._dbgSH = sourceH;
-    console.log('[WebGL] setSource', JSON.stringify({ sourceW, sourceH, complete: image.complete, natW: image.naturalWidth }));
     if (sourceTex) gl.deleteTexture(sourceTex);
     sourceTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, sourceTex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);  // canvas convention: top-left origin
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    // DEBUG: sample center pixel of source texture
     const dbgFBO = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, dbgFBO);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sourceTex, 0);
@@ -364,7 +362,6 @@ function createWebGLPipeline() {
     if (srcStatus === gl.FRAMEBUFFER_COMPLETE) {
       gl.readPixels(Math.floor(sourceW/2), Math.floor(sourceH/2), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, srcPx);
     }
-    console.log('[WebGL] sourceTex center', JSON.stringify({status: srcStatus, r: srcPx[0], g: srcPx[1], b: srcPx[2], a: srcPx[3], sourceW, sourceH}));
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.deleteFramebuffer(dbgFBO);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -427,7 +424,19 @@ function createWebGLPipeline() {
   }
 
   function updateState(state) {
-    Object.assign(lastState, state);
+    // Default missing keys to 0 — undefined would otherwise become NaN
+    // when divided by 100 in the shader, producing black output.
+    Object.assign(lastState, {
+      exposure: state.exposure || 0,
+      contrast: state.contrast || 0,
+      brightness: state.brightness || 0,
+      saturation: state.saturation || 0,
+      temp: state.temp || 0,
+      tint: state.tint || 0,
+      sharpen: state.sharpen || 0,
+      lut_id: state.lut_id || 0,
+      lut_intensity: state.lut_intensity || 0,
+    });
   }
 
   function runPass(
@@ -448,11 +457,10 @@ function createWebGLPipeline() {
   }
 
   function render() {
-    if (!ready || !gl || !canvasRef) { console.log('[WebGL] render skipped', {ready, gl: !!gl, canvasRef: !!canvasRef}); return; }
+    if (!ready || !gl || !canvasRef) return;
     const ctx = gl;
     const w = canvasRef.width;
     const h = canvasRef.height;
-    console.log('[WebGL] render start', JSON.stringify({ w, h, sourceW, sourceH, sourceTex: !!sourceTex, sharpenTexA: !!sharpenTexA, sharpenFboA: !!sharpenFboA }));
 
     // Sharpen pipeline: only if sharpen > 0. Source → blur → unsharp.
     // Output: texture containing sharpened image.
@@ -520,14 +528,6 @@ function createWebGLPipeline() {
       gl.uniform1f(gl.getUniformLocation(p, 'uTint'), lastState.tint);
     }, null, w, h);
 
-    // DEBUG
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    const fbs = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-    console.log('[WebGL] post-render', JSON.stringify({fbs, fbsHex: '0x' + fbs.toString(16), canvasW: canvasRef.width, canvasH: canvasRef.height, drawingBufferW: gl.drawingBufferWidth, drawingBufferH: gl.drawingBufferHeight, FB_COMPLETE: gl.FRAMEBUFFER_COMPLETE}));
-    // Sample center pixel
-    const dbgPx = new Uint8Array(4);
-    try { gl.readPixels(Math.floor(w/2), Math.floor(h/2), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, dbgPx); } catch(e) { console.log('[WebGL] readPixels fail:', e.message); }
-    console.log('[WebGL] center pixel', JSON.stringify({r: dbgPx[0], g: dbgPx[1], b: dbgPx[2], a: dbgPx[3]}));
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }

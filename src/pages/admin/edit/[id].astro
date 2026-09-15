@@ -831,20 +831,76 @@ const sourceUrl = `/api/images/${img.id}/source`;
       const btnRevert = document.getElementById('btn-revert');
       const btnReset = document.getElementById('btn-reset');
 
-      const canvas = document.getElementById('preview');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        statusEl.textContent = 'Canvas 2D not supported in this browser.';
-        statusEl.classList.add('error');
-        throw new Error('no 2d ctx');
+      // ---- Canvas setup with optional WebGL2 GPU pipeline ----
+      // We must grab the right context type BEFORE any other code touches
+      // the canvas — a canvas can hold only ONE rendering context. The
+      // previous integration attempt failed because the live #preview canvas
+      // had already been touched by a 2D getContext() call (or had its
+      // framebuffer dimensions changed via CSS resize) before WebGL2 was
+      // allocated, producing a black-output framebuffer. The fix: clone
+      // the canvas, replace it in the DOM, and grab the context on the
+      // fresh clone.
+      const _origCanvas = document.getElementById('preview');
+      const canvas = _origCanvas.cloneNode(false);
+      _origCanvas.parentNode.replaceChild(canvas, _origCanvas);
+
+      let ctx = null;
+      let webglPipeline = null;
+      let useWebGL = false;
+
+      // Probe WebGL2 first.
+      const _gl2 = canvas.getContext('webgl2', {
+        alpha: false, antialias: false, depth: false, stencil: false,
+        preserveDrawingBuffer: false, premultipliedAlpha: false,
+      });
+
+      if (_gl2) {
+        // WebGL2 is available. Pipeline will be lazily loaded on first draw.
+        useWebGL = true;
+      } else {
+        // Fall back to 2D context.
+        ctx = canvas.getContext('2d', { alpha: false });
+        if (!ctx) {
+          statusEl.textContent = 'Canvas 2D not supported in this browser.';
+          statusEl.classList.add('error');
+          throw new Error('no 2d ctx');
+        }
+        ctx.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in ctx) {
+          ctx.imageSmoothingQuality = 'high';
+        }
       }
-      // Highest-quality resampling for any drawImage() downsample. Browser
-      // default varies (Chrome=low, Firefox=medium); we explicitly want high
-      // because Daz's editor renders at native source res and CSS-scales to
-      // display — the canvas blit shouldn't introduce bilinear softness.
-      ctx.imageSmoothingEnabled = true;
-      if ('imageSmoothingQuality' in ctx) {
-        ctx.imageSmoothingQuality = 'high';
+
+      // ---- Lazy WebGL pipeline loader ----
+      // Loaded on first WebGL draw. The pipeline module is served from
+      // /_webgl-pipeline.js (bundled from src/lib/editor-gl.ts). We use
+      // dynamic import + blob URL so the bundle is fetched once and
+      // cached by the browser.
+      let _drawPipelineLoading = null;
+      async function loadWebGLPipeline() {
+        if (webglPipeline !== null && webglPipeline !== false) return webglPipeline;
+        if (!_drawPipelineLoading) {
+          _drawPipelineLoading = (async () => {
+            try {
+              const res = await fetch('/_webgl-pipeline.js');
+              if (!res.ok) throw new Error('pipeline not served');
+              const code = await res.text();
+              const blob = new Blob([code], { type: 'application/javascript' });
+              const url = URL.createObjectURL(blob);
+              const mod = await import(/* @vite-ignore */ url);
+              if (typeof mod.createWebGLPipeline !== 'function') throw new Error('bad module');
+              const p = mod.createWebGLPipeline();
+              if (!p || !p.init(canvas)) throw new Error('init returned false');
+              return p;
+            } catch (e) {
+              console.warn('WebGL pipeline load failed:', e);
+              return false;
+            }
+          })();
+        }
+        const result = await _drawPipelineLoading;
+        webglPipeline = result;
+        return webglPipeline;
       }
 
       const state = { ...initialParams };
@@ -1150,7 +1206,8 @@ const sourceUrl = `/api/images/${img.id}/source`;
           canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + z + ')';
         }
         // Hint the canvas blit / CSS scale to use the highest-quality resampler.
-        if (ctx.imageSmoothingQuality !== undefined) {
+        // Skip when ctx is null (WebGL path owns the canvas).
+        if (ctx && ctx.imageSmoothingQuality !== undefined) {
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
         }
@@ -1384,7 +1441,8 @@ const sourceUrl = `/api/images/${img.id}/source`;
         }
       }
 
-      function draw() {
+      // ---- Legacy 2D pipeline (preserved for fallback and iOS) ----
+      function drawLegacy() {
         if (!sourceImage.complete || !sourceImage.naturalWidth) return;
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1490,7 +1548,102 @@ const sourceUrl = `/api/images/${img.id}/source`;
             ctx.fillRect(x - h/2, y - h/2, h, h);
           });
         }
+      
       }
+
+      // ---- WebGL GPU pipeline (new) ----
+      // Lazy source upload + LUT upload + uniform state update + render.
+      // Returns true on success, false if WebGL pipeline unavailable.
+      let _webglSourceRef = null;
+      let _webglSourceUploaded = false;
+      let _webglLutRef = null;
+      async function drawWebGL() {
+        if (!useWebGL) return false;
+        if (webglPipeline === null || webglPipeline === false) {
+          if (webglPipeline === null) {
+            const p = await loadWebGLPipeline();
+            if (!p) return false;
+            webglPipeline = p;
+          } else {
+            return false;
+          }
+        }
+        if (!sourceImage.complete || !sourceImage.naturalWidth) return false;
+
+        // Re-upload source if the image changed
+        if (_webglSourceRef !== sourceImage.src) {
+          _webglSourceUploaded = false;
+          _webglSourceRef = sourceImage.src;
+        }
+        if (!_webglSourceUploaded) {
+          webglPipeline.setSource(sourceImage);
+          _webglSourceUploaded = true;
+        }
+
+        // Re-upload LUT if the active LUT changed
+        if (activeLut && _webglLutRef !== activeLut) {
+          webglPipeline.setLut(activeLut);
+          _webglLutRef = activeLut;
+        }
+
+        // Push current state to GPU
+        webglPipeline.updateState({
+          exposure: state.exposure,
+          contrast: state.contrast,
+          brightness: state.brightness,
+          saturation: state.saturation,
+          temp: state.temp,
+          tint: state.tint,
+          sharpen: state.sharpen,
+          lut_intensity: state.lut_intensity,
+        });
+        webglPipeline.render();
+        return true;
+      }
+
+      // Crop overlay rendered as DOM (4 dim rects + border + corner handles).
+      // WebGL can't draw 2D context ops, so we use absolutely-positioned divs
+      // overlaid on the canvas instead. This works in both WebGL and legacy modes.
+      function drawCropOverlayDom() {
+        let overlay = document.getElementById('crop-overlay');
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.id = 'crop-overlay';
+          overlay.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:5;';
+          canvas.parentNode.appendChild(overlay);
+        }
+        overlay.innerHTML = '';
+        if (!state.crop) return;
+        const c = state.crop;
+        const cw = canvas.clientWidth, ch = canvas.clientHeight;
+        const x = c.x * cw, y = c.y * ch, w = c.w * cw, h = c.h * ch;
+        const dim = 'position:absolute;background:rgba(0,0,0,0.55);';
+        overlay.appendChild(Object.assign(document.createElement('div'), { style: dim + 'left:0;top:0;width:' + cw + 'px;height:' + y + 'px;' }));
+        overlay.appendChild(Object.assign(document.createElement('div'), { style: dim + 'left:0;top:' + y + 'px;width:' + x + 'px;height:' + h + 'px;' }));
+        overlay.appendChild(Object.assign(document.createElement('div'), { style: dim + 'left:' + (x + w) + 'px;top:' + y + 'px;width:' + (cw - x - w) + 'px;height:' + h + 'px;' }));
+        overlay.appendChild(Object.assign(document.createElement('div'), { style: dim + 'left:0;top:' + (y + h) + 'px;width:' + cw + 'px;height:' + (ch - y - h) + 'px;' }));
+        overlay.appendChild(Object.assign(document.createElement('div'), { style: 'position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + w + 'px;height:' + h + 'px;border:1.5px solid #fafafa;box-sizing:border-box;' }));
+        const hs = 12;
+        const handleStyle = 'position:absolute;background:#fafafa;width:' + hs + 'px;height:' + hs + 'px;';
+        [[x,y],[x+w,y],[x,y+h],[x+w,y+h]].forEach(([hx,hy]) => {
+          const d = document.createElement('div');
+          d.style.cssText = handleStyle + 'left:' + (hx - hs/2) + 'px;top:' + (hy - hs/2) + 'px;';
+          overlay.appendChild(d);
+        });
+      }
+
+      // ---- Unified draw dispatcher ----
+      function draw() {
+        if (!sourceImage.complete || !sourceImage.naturalWidth) return;
+        if (useWebGL) {
+          drawWebGL();
+          applyVignetteOverlay();
+          drawCropOverlayDom();
+          return;
+        }
+        drawLegacy();
+      }
+
 
       // Flag set by Save / Revert so onload can wipe the local overlay state
       // and present the saved result cleanly. Without this, the crop dim mask,
