@@ -37,6 +37,7 @@ import {
 } from '../../../../lib/db-image-edits';
 import { readAdminSession } from '../../../../lib/auth';
 import { imgproxyUrl } from '../../../../lib/imgproxy';
+import { buildDarktableXmp, readCameraWb } from '../../../../lib/darktable-xmp';
 
 export const prerender = false;
 
@@ -222,11 +223,23 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
  * means darktable applies its built-in defaults (sensible demosaic +
  * sRGB output).
  */
-async function renderWithDarktable(rawPath: string, outputPath: string, timeoutMs: number): Promise<void> {
+async function renderWithDarktable(rawPath: string, outputPath: string, timeoutMs: number, xmpOpts?: { kelvin: number; tint: number; baseline?: { r: number; g: number; b: number }; lens_on?: boolean; nr_lum?: number; nr_chroma?: number }): Promise<void> {
   await mkdir('/app/.config/darktable', { recursive: true });
   await mkdir('/app/.cache/darktable', { recursive: true });
-  const xmpPath = '/tmp/snappydo-empty.xmp';
-  await writeFile(xmpPath, '<?xml version="1.0" encoding="UTF-8"?>\n<x:xmpmeta xmlns:x="adobe:ns:meta/">\n</x:xmpmeta>\n', 'utf8');
+  const xmpPath = '/tmp/snappydo-raw-sidecar.xmp';
+  // Default baseline if caller didn't provide one (uses D65; works for
+  // cameras that record as-shot WB close to daylight; for Sony/Canon
+  // the caller should pass the auto-WB read from EXIF for best results).
+  const baseline = xmpOpts?.baseline ?? { r: 1, g: 1, b: 1 };
+  const xmp = buildDarktableXmp({
+    kelvin: xmpOpts?.kelvin ?? 5500,
+    tint: xmpOpts?.tint ?? 0,
+    baseline,
+    lens_on: xmpOpts?.lens_on ?? false,
+    nr_lum: xmpOpts?.nr_lum ?? 0,
+    nr_chroma: xmpOpts?.nr_chroma ?? 0,
+  });
+  await writeFile(xmpPath, xmp, 'utf8');
   const env = { ...process.env, HOME: '/app' };
   await execFile('darktable-cli', [
     rawPath,
@@ -283,8 +296,26 @@ export const POST: APIRoute = async ({ params, request }) => {
     if (img.raw_path) {
       const rawFull = join(UPLOAD_DIR, img.raw_path);
       rawRenderedPath = join('/tmp', `snappydo-raw-${id}-${Date.now()}.jpg`);
+      // Pick up WB values from the request (defaults: 5500K, 0 tint).
+      const kelvin = Number(paramsObj.raw_wb_kelvin) || 5500;
+      const tintForDt = Number(paramsObj.raw_wb_tint) || 0;
+      // Read camera's as-shot WB from the RAW's EXIF so we can shift
+      // ON TOP OF the camera's actual coefficients (writing 1,1,1 as
+      // temperature params on a camera with WB=2.65,1,1.62 produces a
+      // green tint — must multiply, not override).
+      const baseline = await readCameraWb(rawFull);
+      const lensOn = !!Number(paramsObj.raw_lens_on);
+      const nrLum = Number(paramsObj.raw_nr_lum) || 0;
+      const nrChroma = Number(paramsObj.raw_nr_chroma) || 0;
       try {
-        await renderWithDarktable(rawFull, rawRenderedPath, 90000);
+        await renderWithDarktable(rawFull, rawRenderedPath, 90000, {
+          kelvin,
+          tint: tintForDt,
+          baseline,
+          lens_on: lensOn,
+          nr_lum: nrLum,
+          nr_chroma: nrChroma,
+        });
         originalPath = rawRenderedPath;
       } catch (e: any) {
         return new Response(JSON.stringify({ error: 'darktable-cli failed: ' + e.message }), {
@@ -292,21 +323,14 @@ export const POST: APIRoute = async ({ params, request }) => {
         });
       }
     }
-    // For RAW images, fold the WB approximation into the existing temp/tint
-    // sliders before render. The math: deltaK = (kelvin - 5500) / 1000,
-    // the existing temp slider is a -100..+100 RGB shift. deltaK=+1
-    // (cooler) -> temp=-30 (warmer), deltaK=-1 (warmer) -> temp=+30.
-    // Tint stays 1:1. Not a real white balance — that's a per-sensor
-    // operation before demosaic — but gives the user a visible colour
-    // shift for the Kelvin slider. Phase 3.5 will replace this with a
-    // proper darktable-cli XMP sidecar once we crack that format.
-    if (img.raw_path && paramsObj.raw_wb_kelvin != null) {
-      const kelvin = Number(paramsObj.raw_wb_kelvin) || 5500;
-      const tintRaw = Number(paramsObj.raw_wb_tint) || 0;
-      const deltaK = (kelvin - 5500) / 1000;
-      const tempApprox = Math.max(-100, Math.min(100, Math.round(-deltaK * 30)));
-      const tintApprox = Math.max(-100, Math.min(100, Math.round(tintRaw)));
-      paramsObj = { ...paramsObj, temp: tempApprox, tint: tintApprox };
+    // For RAW images the WB has now been applied at the sensor level via
+    // darktable-cli's XMP sidecar (temperature module in darktable-xmp.ts).
+    // Reset temp/tint to neutral so the post-render sharp pass does not
+    // double-cast the colour. ALWAYS reset for RAW (the darktable render
+    // either used the user's K value or fell back to auto-WB, but in both
+    // cases the WB is final — applying temp/tint again would shift again).
+    if (img.raw_path) {
+      paramsObj = { ...paramsObj, temp: 0, tint: 0 };
     }
     try {
       const r = await renderWithSharp(originalPath, paramsObj);
