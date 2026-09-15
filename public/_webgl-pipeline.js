@@ -122,15 +122,17 @@ vec3 applySliders(vec3 c, vec2 uv) {
   float luma = dot(c, vec3(0.299, 0.587, 0.114));
   float satFactor = max(0.0, 1.0 + uSaturation / 100.0); // -100 → 0, 0 → 1, +100 → 2
   c = mix(vec3(luma), c, satFactor);
-  // Temp (warm/cool): shift R opposite B
+  // Temp (warm/cool): multiplicative R/B shift, matching sharp's .tint()
+  // magnitude (max ~0.15 at slider ±100). Multiplicative matches the
+  // server-side save better than additive.
   float tempShift = uTemp / 100.0 * 0.15;
-  c.r += tempShift;
-  c.b -= tempShift;
-  // Tint (magenta/green): shift R+G opposite B
+  c.r *= (1.0 + tempShift);
+  c.b *= (1.0 - tempShift);
+  // Tint (magenta/green): multiplicative G/R shift vs B
   float tintShift = uTint / 100.0 * 0.1;
-  c.r += tintShift * 0.5;
-  c.g += tintShift * 0.5;
-  c.b -= tintShift;
+  c.r *= (1.0 + tintShift * 0.5);
+  c.g *= (1.0 + tintShift * 0.5);
+  c.b *= (1.0 - tintShift);
   return clamp(c, 0.0, 1.0);
 }
 
