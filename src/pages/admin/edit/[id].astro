@@ -1098,31 +1098,43 @@ const sourceUrl = `/api/images/${img.id}/source`;
           const dispScale = Math.min(aw / sourceImage.width, ah / sourceImage.height, 1);
           bw = Math.max(1, Math.round(sourceImage.width * dispScale));
           bh = Math.max(1, Math.round(sourceImage.height * dispScale));
-          canvas.style.left = '';
-          canvas.style.top = '';
+          canvas.width = bw;
+          canvas.height = bh;
+          canvas.style.width = bw + 'px';
+          canvas.style.height = bh + 'px';
+          canvas.style.transform = '';
+          canvas.style.position = '';
         } else {
-          // Pixel-peep mode. Backing = source * zoom/100, CSS-sized the
-          // same. Canvas positioned absolutely with pan offsets. When
-          // zoomed past viewport, user pans to view different regions.
+          // Zoom mode. KEY PERFORMANCE FIX: backing buffer stays at SOURCE
+          // resolution, CSS transform: scale(z) applies the visual zoom.
+          // Pipeline (drawImage, sharpen, sliders, LUT) processes the same
+          // pixel count at all zoom levels — sliders stay as responsive as
+          // at 100%. CSS upscale is GPU bilinear interpolation: smooth
+          // (upsampling doesn't alias, only downsampling does).
+          bw = sourceImage.width;
+          bh = sourceImage.height;
+          canvas.width = bw;
+          canvas.height = bh;
+          canvas.style.width = bw + 'px';
+          canvas.style.height = bh + 'px';
           const z = parseInt(zoomMode, 10) / 100;
-          bw = Math.max(1, Math.round(sourceImage.width * z));
-          bh = Math.max(1, Math.round(sourceImage.height * z));
-          // Centre on first zoom-in.
+          // Pan offsets are in CSS pixels (after the transform). Centring
+          // on first zoom-in positions the source at the centre of the
+          // viewport at this zoom level.
           if (panX === 0 && panY === 0) {
-            panX = Math.round((aw - bw) / 2);
-            panY = Math.round((ah - bh) / 2);
-          } else {
-            // Clamp pan so we don't lose the canvas off-screen entirely.
-            panX = Math.max(Math.min(panX, 32), Math.min(aw - bw - 32, 0));
-            panY = Math.max(Math.min(panY, 32), Math.min(ah - bh - 32, 0));
+            const visW = bw * z;
+            const visH = bh * z;
+            panX = Math.round((aw - visW) / 2);
+            panY = Math.round((ah - visH) / 2);
           }
-          canvas.style.left = panX + 'px';
-          canvas.style.top = panY + 'px';
+          // Clamp pan so canvas doesn't slide entirely off-screen.
+          const visW = bw * z;
+          const visH = bh * z;
+          panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
+          panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
+          canvas.style.transformOrigin = '0 0';
+          canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + z + ')';
         }
-        canvas.width = bw;
-        canvas.height = bh;
-        canvas.style.width = bw + 'px';
-        canvas.style.height = bh + 'px';
         // Hint the canvas blit / CSS scale to use the highest-quality resampler.
         if (ctx.imageSmoothingQuality !== undefined) {
           ctx.imageSmoothingEnabled = true;
@@ -1441,17 +1453,26 @@ const sourceUrl = `/api/images/${img.id}/source`;
         panStartY = panY;
         e.preventDefault();
       });
+      function applyPanTransform() {
+        // Re-apply the current pan as a CSS transform. Cheaper than calling
+        // fitCanvasToArea() on every drag tick (which would reset the
+        // backing buffer and re-render the full pipeline).
+        if (zoomMode === 'fit') return;
+        const z = parseInt(zoomMode, 10) / 100;
+        const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
+        const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
+        const visW = canvas.width * z;
+        const visH = canvas.height * z;
+        panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
+        panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
+        canvas.style.transformOrigin = '0 0';
+        canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + z + ')';
+      }
       window.addEventListener('mousemove', (e) => {
         if (!dragging) return;
         panX = panStartX + (e.clientX - dragStartX);
         panY = panStartY + (e.clientY - dragStartY);
-        // Clamp so canvas doesn't slide entirely off-screen.
-        const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
-        const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
-        panX = Math.max(Math.min(panX, 32), Math.min(aw - canvas.width - 32, 0));
-        panY = Math.max(Math.min(panY, 32), Math.min(ah - canvas.height - 32, 0));
-        canvas.style.left = panX + 'px';
-        canvas.style.top = panY + 'px';
+        applyPanTransform();
       });
       window.addEventListener('mouseup', () => { dragging = false; });
 
@@ -1522,12 +1543,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
           const t = e.touches[0];
           panX = panStartX + (t.clientX - dragStartX);
           panY = panStartY + (t.clientY - dragStartY);
-          const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
-          const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
-          panX = Math.max(Math.min(panX, 32), Math.min(aw - canvas.width - 32, 0));
-          panY = Math.max(Math.min(panY, 32), Math.min(ah - canvas.height - 32, 0));
-          canvas.style.left = panX + 'px';
-          canvas.style.top = panY + 'px';
+          applyPanTransform();
         } else if (e.touches.length === 2) {
           // Pinch zoom
           e.preventDefault();
@@ -1544,12 +1560,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
             const dy = mid.y - pinchMidStartY;
             panX = pinchStartPanX + dx;
             panY = pinchStartPanY + dy;
-            const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
-            const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
-            panX = Math.max(Math.min(panX, 32), Math.min(aw - canvas.width - 32, 0));
-            panY = Math.max(Math.min(panY, 32), Math.min(ah - canvas.height - 32, 0));
-            canvas.style.left = panX + 'px';
-            canvas.style.top = panY + 'px';
+            applyPanTransform();
           } else {
             // Same mode — just translate the canvas under the midpoint.
             const mid = touchMid(e.touches[0], e.touches[1]);
@@ -1557,12 +1568,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
             const dy = mid.y - pinchMidStartY;
             panX = pinchStartPanX + dx;
             panY = pinchStartPanY + dy;
-            const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
-            const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
-            panX = Math.max(Math.min(panX, 32), Math.min(aw - canvas.width - 32, 0));
-            panY = Math.max(Math.min(panY, 32), Math.min(ah - canvas.height - 32, 0));
-            canvas.style.left = panX + 'px';
-            canvas.style.top = panY + 'px';
+            applyPanTransform();
           }
         }
       }, { passive: false });
