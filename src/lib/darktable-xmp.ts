@@ -8,8 +8,10 @@
  *
  * STATUS (2026-09-15):
  *   - temperature (WB): ✅ WIRED + verified visually (with cam-baseline).
+ *   - colorbalance: ✅ WIRED for |deltaK| > 0.5 — dramatic WB on top of temp.
  *   - lensfun: ✅ WIRED — method=embedded metadata, modify_flags=ALL.
- *   - denoiseprofile: ✅ WIRED — strength scaled by lum+chroma.
+ *   - nlmeans (denoise): ✅ WIRED — separate luma/chroma sliders.
+ *   - exiftool WB cache: ✅ WIRED — keyed by path+mtime+size.
  *
  * XMP FORMAT (darktable 4.2.1):
  *   - xmp_version="1" → uses `read_history_v1` (separate rdf:Seq per field).
@@ -50,25 +52,50 @@
  *   (= exactly what EXIF says). Toggle via `lens_on` slider.
  *
  * MAPPING LOGIC (denoise):
- *   darktable's denoiseprofile module has a `strength` param that controls
- *   overall denoise intensity (1.0 = default = neutral, higher = more
- *   denoise). The user's `nr_lum` (0-100) and `nr_chroma` (0-100) sliders
- *   are both mapped to `strength`:
- *     strength = 1.0 + (nr_lum + nr_chroma) / 100 * 1.5
- *   Range: 1.0 (no sliders) → 4.0 (both at max). At 0 sliders, this
- *   matches darktable's default behaviour exactly.
+ *   darktable's NLMeans module (non-profiled, simpler than denoiseprofile)
+ *   has explicit luma and chroma sliders. Our `nr_lum` (0-100) maps to
+ *   `luma = lum / 100`, `nr_chroma` (0-100) maps to `chroma = chroma / 100`.
+ *   radius and strength use sensible defaults (2.0, 50.0).
+ *   modversion = 2, struct = 4 floats (16 bytes).
  */
 
 import { Buffer } from 'node:buffer';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { stat } from 'node:fs/promises';
 const execFileP = promisify(execFile);
+
+// In-memory cache for exiftool results. Keyed by `${path}:${mtime}:${size}`
+// so cache invalidates naturally when the RAW file is replaced.
+const wbCache = new Map<string, { r: number; g: number; b: number; source: string }>();
 
 /**
  * Read the camera's auto/daylight WB coefficients from a RAW file's EXIF.
+ *
+ * CACHED by file fingerprint (path + mtime + size). Repeated calls within
+ * the same Node process skip the exiftool shell-out (~50-200ms saved).
+ * Cache invalidates automatically when the file changes.
+ *
  * (See full docstring at top of file.)
  */
 export async function readCameraWb(rawPath: string): Promise<{ r: number; g: number; b: number; source: string }> {
+  // Check cache first
+  try {
+    const st = await stat(rawPath);
+    const key = `${rawPath}:${st.mtimeMs}:${st.size}`;
+    const cached = wbCache.get(key);
+    if (cached) return cached;
+    // Compute and store under this key
+    const result = await computeWb(rawPath);
+    wbCache.set(key, result);
+    return result;
+  } catch (e) {
+    // stat failed — fall through to uncached compute
+    return computeWb(rawPath);
+  }
+}
+
+async function computeWb(rawPath: string): Promise<{ r: number; g: number; b: number; source: string }> {
   try {
     const { stdout } = await execFileP('exiftool', [
       '-j', '-n', rawPath,
@@ -244,63 +271,86 @@ export function lensParams(opts: {
 }
 
 /**
- * Compute denoise params (modversion=11, ~412 bytes).
+ * Compute NLMeans (non-profiled denoise) params (modversion=2, 16 bytes).
  *
- * Struct layout (dt_iop_denoiseprofile_params_t, darktable 4.2.1):
- *   float radius, nbhood, strength, shadows, bias, scattering,
- *         central_pixel_weight, overshooting         (32 bytes)
- *   float a[3], b[3]                                  (24 bytes)
- *   int mode (dt_iop_denoiseprofile_mode_t)           (4 bytes)
- *   float x[6][7], y[6][7]                            (336 bytes)
- *   int wb_adaptive_anscombe, fix_anscombe_and_nlmeans_norm,
- *       use_new_vst, wavelet_color_mode               (16 bytes)
- *   Total: 412 bytes
+ * Struct layout (dt_iop_nlmeans_params_t, darktable 4.2.1):
+ *   float radius     // patch size, default 2.0
+ *   float strength   // overall strength, default 50.0
+ *   float luma       // 0..1, default 0.5
+ *   float chroma     // 0..1, default 1.0
+ *
+ * Mapping:
+ *   luma = clamp(lum / 100, 0, 1)   (user 0..100 slider)
+ *   chroma = clamp(chroma / 100, 0, 1)
  */
-export function denoiseParams(opts: {
+export function nlmeansParams(opts: {
   nr_lum: number;    // 0-100 slider
   nr_chroma: number; // 0-100 slider
 }): Buffer {
-  const buf = Buffer.alloc(412);
-  let off = 0;
-  // radius = 1.0
-  buf.writeFloatLE(1.0, off); off += 4;
-  // nbhood = 7.0
-  buf.writeFloatLE(7.0, off); off += 4;
-  // strength = 1.0 + (lum+chroma)/100 * 1.5
-  const strength = 1.0 + ((opts.nr_lum + opts.nr_chroma) / 100) * 1.5;
-  buf.writeFloatLE(clamp(strength, 0.001, 100), off); off += 4;
-  // shadows = 1.0
-  buf.writeFloatLE(1.0, off); off += 4;
-  // bias = 0.0
-  buf.writeFloatLE(0.0, off); off += 4;
-  // scattering = 0.0
-  buf.writeFloatLE(0.0, off); off += 4;
-  // central_pixel_weight = 0.1
-  buf.writeFloatLE(0.1, off); off += 4;
-  // overshooting = 1.0
-  buf.writeFloatLE(1.0, off); off += 4;
-  // a[3] = 1,1,1
-  buf.writeFloatLE(1.0, off); off += 4;
-  buf.writeFloatLE(1.0, off); off += 4;
-  buf.writeFloatLE(1.0, off); off += 4;
-  // b[3] = 0,0,0
-  buf.writeFloatLE(0, off); off += 4;
-  buf.writeFloatLE(0, off); off += 4;
-  buf.writeFloatLE(0, off); off += 4;
-  // mode = MODE_WAVELETS (1)
-  buf.writeInt32LE(1, off); off += 4;
-  // x[6][7] = 0 (84 floats)
-  for (let i = 0; i < 6 * 7; i++) { buf.writeFloatLE(0, off); off += 4; }
-  // y[6][7] = 0.5 (default per struct doc)
-  for (let i = 0; i < 6 * 7; i++) { buf.writeFloatLE(0.5, off); off += 4; }
-  // wb_adaptive_anscombe = TRUE (1)
-  buf.writeInt32LE(1, off); off += 4;
-  // fix_anscombe_and_nlmeans_norm = TRUE (1)
-  buf.writeInt32LE(1, off); off += 4;
-  // use_new_vst = TRUE (1)
-  buf.writeInt32LE(1, off); off += 4;
-  // wavelet_color_mode = MODE_Y0U0V0 (1)
-  buf.writeInt32LE(1, off); off += 4;
+  const buf = Buffer.alloc(16);
+  // radius = 2.0 (default)
+  buf.writeFloatLE(2.0, 0);
+  // strength = 50.0 (default)
+  buf.writeFloatLE(50.0, 4);
+  // luma = slider / 100
+  buf.writeFloatLE(clamp(opts.nr_lum / 100, 0, 1), 8);
+  // chroma = slider / 100
+  buf.writeFloatLE(clamp(opts.nr_chroma / 100, 0, 1), 12);
+  return buf;
+}
+
+/**
+ * Compute colorbalance params (modversion=3, 68 bytes).
+ *
+ * Struct layout (dt_iop_colorbalance_params_t, darktable 4.2.1):
+ *   dt_iop_colorbalance_mode_t mode (int, 4 bytes) — default SLOPE_OFFSET_POWER=1
+ *   float lift[4]   (16 bytes) — CHANNEL_SIZE = {FACTOR, RED, GREEN, BLUE}
+ *   float gamma[4]  (16 bytes)
+ *   float gain[4]   (16 bytes)
+ *   float saturation, contrast, grey, saturation_out (4×4 = 16 bytes)
+ *   Total: 68 bytes
+ *
+ * Used to add dramatic WB shifts ON TOP of the temperature module.
+ * Temperature's chromatic adaptation dampens extreme shifts; colorbalance
+ * in SLOPE_OFFSET_POWER mode provides pure multiplicative gain per channel
+ * (no chromatic adaptation) — the right tool for dramatic creative shifts.
+ *
+ * Mapping (additive on top of temperature):
+ *   gain[R] = 1 + deltaK * 0.30  (warm boosts red, cool reduces red)
+ *   gain[B] = 1 - deltaK * 0.30  (warm reduces blue, cool boosts blue)
+ *   gain[G] = gain[FACTOR] = 1.0 (neutral)
+ *   lift, gamma, saturation, contrast, grey, saturation_out = defaults
+ */
+export function colorbalanceParams(opts: {
+  kelvin: number;
+}): Buffer {
+  const buf = Buffer.alloc(68);
+  const deltaK = (opts.kelvin - 5500) / 1000;
+  // mode = SLOPE_OFFSET_POWER (1)
+  buf.writeInt32LE(1, 0);
+  // lift[4] = FACTOR=1, RED=1, GREEN=1, BLUE=1
+  buf.writeFloatLE(1.0, 4);
+  buf.writeFloatLE(1.0, 8);
+  buf.writeFloatLE(1.0, 12);
+  buf.writeFloatLE(1.0, 16);
+  // gamma[4] = 1, 1, 1, 1
+  buf.writeFloatLE(1.0, 20);
+  buf.writeFloatLE(1.0, 24);
+  buf.writeFloatLE(1.0, 28);
+  buf.writeFloatLE(1.0, 32);
+  // gain[4]: FACTOR=1, RED = 1 + deltaK*0.30, GREEN = 1, BLUE = 1 - deltaK*0.30
+  buf.writeFloatLE(1.0, 36);
+  buf.writeFloatLE(clamp(1 + deltaK * 0.30, 0.1, 4), 40);
+  buf.writeFloatLE(1.0, 44);
+  buf.writeFloatLE(clamp(1 - deltaK * 0.30, 0.1, 4), 48);
+  // saturation = 1.0
+  buf.writeFloatLE(1.0, 52);
+  // contrast = 1.0
+  buf.writeFloatLE(1.0, 56);
+  // grey = 18.0 (default)
+  buf.writeFloatLE(18.0, 60);
+  // saturation_out = 1.0
+  buf.writeFloatLE(1.0, 64);
   return buf;
 }
 
@@ -345,6 +395,21 @@ export function buildDarktableXmp(opts: DarktableXmpOptions): string {
   });
   iopOrderNames.push('temperature');
 
+  // Colorbalance: only when WB shift is dramatic (|deltaK| > 0.5)
+  // — adds multiplicative gain on top of temperature's chromatic
+  // adaptation. Provides the "extra drama" for users wanting bold
+  // sunset/sunrise looks that the temperature module alone can't
+  // deliver due to its white-point preservation.
+  const deltaK = (kelvin - 5500) / 1000;
+  if (Math.abs(deltaK) > 0.5) {
+    modules.push({
+      op: 'colorbalance',
+      modversion: 3,
+      params: colorbalanceParams({ kelvin }),
+    });
+    iopOrderNames.push('colorbalance');
+  }
+
   // Lens: only if lens_on
   if (lensOn) {
     modules.push({
@@ -355,14 +420,14 @@ export function buildDarktableXmp(opts: DarktableXmpOptions): string {
     iopOrderNames.push('lens');
   }
 
-  // Denoise: only if at least one slider is non-zero
+  // Denoise (NLMeans): only if at least one slider is non-zero
   if (nrLum > 0 || nrChroma > 0) {
     modules.push({
-      op: 'denoiseprofile',
-      modversion: 11,
-      params: denoiseParams({ nr_lum: nrLum, nr_chroma: nrChroma }),
+      op: 'nlmeans',
+      modversion: 2,
+      params: nlmeansParams({ nr_lum: nrLum, nr_chroma: nrChroma }),
     });
-    iopOrderNames.push('denoiseprofile');
+    iopOrderNames.push('nlmeans');
   }
 
   const items = modules.map(m => v1HistoryItem(m));
