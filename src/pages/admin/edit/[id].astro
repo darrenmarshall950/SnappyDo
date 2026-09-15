@@ -712,7 +712,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
           </div>
           <div class="slider" data-key="tint">
             <label>Tint</label>
-            <input type="range" min="-100" max="100" step="1" />
+            <input type="range" min="-200" max="200" step="1" />
             <span class="val">0</span>
           </div>
         </section>
@@ -1583,6 +1583,20 @@ const sourceUrl = `/api/images/${img.id}/source`;
         if (!_webglSourceUploaded) {
           webglPipeline.setSource(sourceImage);
           _webglSourceUploaded = true;
+        }
+
+        // Compare mode: show the original by pushing a neutral state to the
+        // GPU. Source passes through unchanged. Bypass LUT too.
+        if (comparing) {
+          webglPipeline.updateState({
+            exposure: 0, contrast: 0, brightness: 0,
+            saturation: 0, temp: 0, tint: 0,
+            sharpen: 0, lut_id: 0, lut_intensity: 0,
+            vignette: 0, highlights: 0, shadows: 0,
+            whites: 0, blacks: 0,
+          });
+          webglPipeline.render();
+          return true;
         }
 
         // Re-upload LUT if the active LUT changed
