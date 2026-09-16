@@ -126,6 +126,28 @@ export function deleteUserPreset(id: number, username: string): boolean {
   return true;
 }
 
+/**
+ * Update an existing user preset. Only the owner may update; builtins are
+ * read-only (returns null). Either name, params, or both may be supplied.
+ */
+export function updateUserPreset(
+  id: number,
+  patch: { name?: string; params?: Record<string, any> },
+  username: string,
+): PresetRow | null {
+  ensureSchema();
+  const row = getPresetById(id);
+  if (!row || row.kind !== 'user') return null;
+  if (row.username !== username) return null; // users only update their own
+  const nextName = patch.name != null ? String(patch.name).trim() : row.name;
+  const nextParamsJson = patch.params != null ? JSON.stringify(patch.params) : row.params_json;
+  if (!nextName) return null; // empty name rejected
+  if (nextName.length > 60) return null; // length cap matches POST validation
+  getDb().prepare(`UPDATE presets SET name = ?, params_json = ? WHERE id = ?`)
+    .run(nextName, nextParamsJson, id);
+  return getPresetById(id) ?? null;
+}
+
 export function getBuiltinPresetKeys(): string[] {
   return BUILTIN_PRESETS.map((p) => p.key);
 }

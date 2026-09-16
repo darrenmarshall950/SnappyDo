@@ -11,7 +11,7 @@
  */
 import type { APIRoute } from 'astro';
 import { readAdminSession } from '../../../lib/auth';
-import { listAvailablePresets, saveUserPreset, deleteUserPreset, getPresetById } from '../../../lib/presets';
+import { listAvailablePresets, saveUserPreset, deleteUserPreset, getPresetById, updateUserPreset } from '../../../lib/presets';
 
 function json(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -79,6 +79,57 @@ export const DELETE: APIRoute = async ({ request }) => {
   const ok = deleteUserPreset(id, session.user);
   if (!ok) return json({ error: 'Preset not found or not yours' }, 400);
   return json({ ok: true });
+};
+
+/**
+ * PATCH /api/presets?id=<id>
+ * Body: { name?: string, params?: Record<string, any> }
+ * Either or both fields may be supplied. Built-ins are read-only.
+ */
+export const PATCH: APIRoute = async ({ request }) => {
+  const session = readAdminSession(request);
+  if (!session) return unauthorized();
+  const id = Number(new URL(request.url).searchParams.get('id'));
+  if (!Number.isFinite(id) || id <= 0) return json({ error: 'invalid id' }, 400);
+
+  const ct = request.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    return json({ error: 'Expected application/json' }, 400);
+  }
+
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== 'object') return json({ error: 'Invalid JSON' }, 400);
+
+  const patch: { name?: string; params?: Record<string, any> } = {};
+  if (body.name !== undefined) patch.name = String(body.name).trim();
+  if (body.params !== undefined) {
+    if (typeof body.params !== 'object' || body.params === null) {
+      return json({ error: 'params must be an object' }, 400);
+    }
+    patch.params = body.params as Record<string, any>;
+  }
+  if (patch.name !== undefined && !patch.name) {
+    return json({ error: 'name cannot be empty' }, 400);
+  }
+  if (patch.name !== undefined && patch.name.length > 60) {
+    return json({ error: 'name too long (max 60 chars)' }, 400);
+  }
+  if (Object.keys(patch).length === 0) {
+    return json({ error: 'no fields to update' }, 400);
+  }
+
+  const row = updateUserPreset(id, patch, session.user);
+  if (!row) return json({ error: 'Preset not found, builtin, or not yours' }, 400);
+  return json({
+    preset: {
+      id: row.id,
+      name: row.name,
+      kind: row.kind,
+      username: row.username,
+      params: safeParse(row.params_json),
+      created_at: row.created_at,
+    },
+  });
 };
 
 function safeParse(json: string): any {

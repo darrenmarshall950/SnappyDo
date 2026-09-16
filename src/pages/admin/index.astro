@@ -52,7 +52,10 @@ const summary = galleries.map((g) => ({
               {summary.reduce((s, g) => s + g.photoCount, 0)} photos total
             </p>
           </div>
-          <a href="/admin/galleries/new" class="admin-btn admin-btn--primary">+ New gallery</a>
+          <div class="admin-section__actions">
+            <a href="/admin/presets" class="admin-btn">Presets</a>
+            <a href="/admin/galleries/new" class="admin-btn admin-btn--primary">+ New gallery</a>
+          </div>
         </div>
 
         {summary.length === 0 ? (
