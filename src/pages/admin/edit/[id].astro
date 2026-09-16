@@ -67,6 +67,10 @@ const initialParams = latestEdit ? JSON.parse(latestEdit.params_json) : {
 // imgproxy's "no resize" passthrough would be ideal but can be slow on large files.
 // The full-resolution URL via imgproxy: format=jpg, quality=95, no width cap.
 const sourceUrl = `/api/images/${img.id}/source`;
+// Feature flag: when SNAPPYDO_RAW_PREVIEW_RENDER=1, the editor requests
+// darktable-cli renders of the RAW with current XMP params on slider-release
+// (cached by hash). Default OFF — set the env to enable.
+const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
       // Same-origin endpoint with CORS headers; keeps the WebGL canvas un-tainted
       // so canvas.toBlob() works on Save. imgproxy's URLs are cross-origin
       // (host:8090 vs the editor on host:3010) and don't ship CORS, which
@@ -832,6 +836,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
       hasExistingEdit: !!latestEdit,
       RAW_DEFAULTS,
       RAW_KEYS,
+      rawPreviewEnabled,
     }}>
 
       // ---- Canvas 2D editor ----
@@ -1747,6 +1752,58 @@ const sourceUrl = `/api/images/${img.id}/source`;
       // of the (correctly baked) saved image.
       let _resetOnLoad = false;
       const SLIDER_KEYS = ['exposure','contrast','brightness','highlights','shadows','whites','blacks','saturation','temp','tint','sharpen','vignette','lut_intensity', ...RAW_KEYS];
+
+      // ============= RAW preview-render fetch (feature-gated) =============
+      // On slider-release, ask the server to render the RAW via darktable-cli
+      // with the current XMP params. The server caches by hash, so revisits are
+      // instant. Only active when SNAPPYDO_RAW_PREVIEW_RENDER=1 AND isRawAtRuntime.
+      let _rawPreviewTimer = null;
+      let _rawPreviewInFlight = null;
+      let _lastRawPreviewHash = null;
+      function scheduleRawPreviewFetch(_reason) {
+        if (!rawPreviewEnabled || !isRawAtRuntime) return;
+        if (_rawPreviewTimer) clearTimeout(_rawPreviewTimer);
+        _rawPreviewTimer = setTimeout(fetchRawPreview, 300);
+      }
+      async function fetchRawPreview() {
+        if (!rawPreviewEnabled || !isRawAtRuntime) return;
+        const body = {
+          kelvin: Number(state.raw_wb_kelvin) || 5500,
+          tint: Number(state.raw_wb_tint) || 0,
+          lens_on: !!state.raw_lens_on,
+          nr_lum: Number(state.raw_nr_lum) || 0,
+          nr_chroma: Number(state.raw_nr_chroma) || 0,
+        };
+        const hashKey = JSON.stringify(body);
+        if (hashKey === _lastRawPreviewHash) return; // no-op
+        _lastRawPreviewHash = hashKey;
+        if (_rawPreviewInFlight) { try { _rawPreviewInFlight.abort(); } catch {} }
+        const ctrl = new AbortController();
+        _rawPreviewInFlight = ctrl;
+        setStatus('RAW preview rendering…');
+        try {
+          const r = await fetch('/api/images/' + imageId + '/preview', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: ctrl.signal,
+          });
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            setStatus('RAW preview failed: ' + (err.error || r.statusText), true);
+            return;
+          }
+          const data = await r.json();
+          // Swap source image to the cached preview, then redraw.
+          // Appending ?v=<hash> forces a cache-bust even if URL params are stable.
+          const url = data.url + (data.url.includes('?') ? '&' : '?') + 'v=' + data.hash;
+          sourceImage.src = url;
+          setStatus('RAW preview ' + (data.cached ? 'loaded from cache.' : 'rendered.'));
+        } catch (e) {
+          if (e && e.name === 'AbortError') return;
+          setStatus('RAW preview error: ' + (e && e.message ? e.message : e), true);
+        }
+      }
       const isRawAtRuntime = document.getElementById('section-raw') !== null;
       function resetAllStateAndUi() {
         for (const k of SLIDER_KEYS) state[k] = 0;
@@ -2151,6 +2208,9 @@ const sourceUrl = `/api/images/${img.id}/source`;
           applyVignetteOverlay();
           applyRawPreviewFx();
           scheduleDraw();
+          // RAW preview-render: re-fetch on slider-release (debounced 300ms).
+          // Only fires if the slider is one of the RAW-only keys.
+          if (RAW_KEYS.includes(key)) scheduleRawPreviewFetch('slider:' + key);
         });
       });
 
@@ -2235,6 +2295,7 @@ const sourceUrl = `/api/images/${img.id}/source`;
           state.raw_lens_on = lensCbEl.checked ? 1 : 0;
           applyRawPreviewFx();
           scheduleDraw();
+          scheduleRawPreviewFetch('lens');
         });
       }
 
