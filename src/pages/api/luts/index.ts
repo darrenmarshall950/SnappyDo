@@ -7,7 +7,7 @@
  */
 import type { APIRoute } from 'astro';
 import { readAdminSession } from '../../../lib/auth';
-import { ensureLutDir, LUT_UPLOAD_DIR, listAvailableLuts, uploadLut, deleteLut, parseCube } from '../../../lib/luts';
+import { ensureLutDir, LUT_UPLOAD_DIR, listAvailableLuts, uploadLut, deleteLut, parseCube, synthesizeLut, listTopLuts, getLutSynthParams, getLutById } from '../../../lib/luts';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -89,3 +89,11 @@ export const DELETE: APIRoute = async ({ request }) => {
   if (!ok) return json({ error: 'LUT not found or is a built-in' }, 400);
   return json({ ok: true });
 };
+
+
+/**
+ * POST /api/luts/synth
+ * Body: { name, params: {exposure, brightness, contrast, saturation, temp, tint}, base_lut_id?: number }
+ * Synthesises a .cube file from slider ops applied to identity or base LUT.
+ * Returns the new LUT row. Original base LUT is unchanged.
+ */

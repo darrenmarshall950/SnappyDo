@@ -1,0 +1,530 @@
+---
+/**
+ * /admin/looks — Combined Looks management page.
+ *
+ * One page with:
+ *  - Top 10 quick-selector (presets + LUTs by usage)
+ *  - LUT list with edit/save-as-new
+ *  - Full LUT editor (slider-based, can save-as-new from any LUT)
+ *  - Preset list with rename/edit-params/delete (preserved from old /admin/presets)
+ *
+ * Editing a LUT never modifies the original — it creates a new LUT with
+ * parent_id pointing at the source. Originals remain untouched.
+ */
+import { listAvailablePresets, listTopPresets } from '../../lib/presets';
+import { listAvailableLuts, listTopLuts, getLutSynthParams } from '../../lib/luts';
+
+export const prerender = false;
+
+const admin = Astro.locals.admin;
+if (!admin) {
+  return Astro.redirect('/admin/login?next=/admin/looks', 302);
+}
+
+const allPresets = listAvailablePresets(admin.user);
+const topPresets = listTopPresets(admin.user, 10);
+const topLuts = listTopLuts(10);
+const allLuts = listAvailableLuts();
+
+const PRESET_SLIDER_KEYS = [
+  'exposure','contrast','brightness','highlights','shadows',
+  'whites','blacks','saturation','temp','tint',
+  'sharpen','vignette','lut_intensity',
+];
+
+// Per-pixel slider subset — the 6 ops the LUT editor bakes into the .cube.
+const LUT_SLIDER_KEYS = ['exposure','brightness','contrast','saturation','temp','tint'];
+
+const SLIDER_META: Record<string, { min: number; max: number; step: number; label: string }> = {
+  exposure:      { min: -200, max: 200, step: 1, label: 'Exposure' },
+  contrast:      { min: -100, max: 100, step: 1, label: 'Contrast' },
+  brightness:    { min: -100, max: 100, step: 1, label: 'Brightness' },
+  highlights:    { min: -100, max: 100, step: 1, label: 'Highlights' },
+  shadows:       { min: -100, max: 100, step: 1, label: 'Shadows' },
+  whites:        { min: -100, max: 100, step: 1, label: 'Whites' },
+  blacks:        { min: -100, max: 100, step: 1, label: 'Blacks' },
+  saturation:    { min: -100, max: 100, step: 1, label: 'Saturation' },
+  temp:          { min: -100, max: 100, step: 1, label: 'Temp' },
+  tint:          { min: -100, max: 100, step: 1, label: 'Tint' },
+  sharpen:       { min: 0,    max: 200, step: 1, label: 'Sharpen' },
+  vignette:      { min: -100, max: 100, step: 1, label: 'Vignette' },
+  lut_intensity: { min: 0,    max: 100, step: 1, label: 'LUT Intensity' },
+};
+
+function safeParse(s: string): any {
+  try { return JSON.parse(s); } catch { return {}; }
+}
+
+const initialJson = {
+  builtins: allPresets.filter((r) => r.kind === 'builtin').map((r) => ({
+    id: r.id, name: r.name, builtin_key: r.builtin_key,
+    params: safeParse(r.params_json),
+  })),
+  userPresets: allPresets.filter((r) => r.kind === 'user').map((r) => ({
+    id: r.id, name: r.name,
+    params: safeParse(r.params_json), created_at: r.created_at,
+  })),
+  luts: allLuts.map((r) => ({
+    id: r.id, name: r.name, kind: r.kind, builtin_key: r.builtin_key,
+    parent_id: r.parent_id,
+    synth_params: getLutSynthParams(r.id),
+  })),
+  topPresets: topPresets.map((r) => ({ id: r.id, name: r.name, kind: r.kind })),
+  topLuts: topLuts.map((r) => ({ id: r.id, name: r.name, kind: r.kind, use_count: r.use_count })),
+};
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Looks — SnappyDo Admin</title>
+  </head>
+  <body class="admin-body">
+    <header class="admin-header">
+      <a href="/" class="admin-header__brand">SnappyDo</a>
+      <nav class="admin-header__nav">
+        <a href="/admin" class="admin-header__back">← Dashboard</a>
+        <span class="admin-header__user">Signed in as <strong>{admin?.user}</strong></span>
+        <form method="POST" action="/admin/api/logout" class="admin-header__logout-form">
+          <button type="submit" class="admin-header__logout">Sign out</button>
+        </form>
+      </nav>
+    </header>
+
+    <main class="admin-main">
+      <section class="admin-section">
+        <div class="admin-section__head">
+          <div>
+            <h1>Looks</h1>
+            <p class="admin-section__sub">
+              {initialJson.builtins.length} built-in presets · {initialJson.userPresets.length} saved presets · {initialJson.luts.length} LUTs ({initialJson.luts.filter(l => l.kind==='builtin').length} built-in)
+            </p>
+          </div>
+        </div>
+
+        <!-- Top 10 quick-selector -->
+        <h2 class="subhead">Top 10 <span class="hint">Most-used across your edits</span></h2>
+        <div class="top-grid">
+          <div class="top-col">
+            <h3 class="top-col__h">Presets</h3>
+            {initialJson.topPresets.length === 0 ? (
+              <p class="empty-mini">No presets yet.</p>
+            ) : (
+              <ul class="top-list">
+                {initialJson.topPresets.map((p, i) => (
+                  <li class="top-item">
+                    <span class="top-rank">#{i + 1}</span>
+                    <span class="top-name">{p.name}</span>
+                    {p.kind === 'builtin' && <span class="chip chip--readonly">built-in</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div class="top-col">
+            <h3 class="top-col__h">LUTs <span class="hint">(by usage)</span></h3>
+            {initialJson.topLuts.length === 0 ? (
+              <p class="empty-mini">No LUTs yet.</p>
+            ) : (
+              <ul class="top-list">
+                {initialJson.topLuts.map((l, i) => (
+                  <li class="top-item">
+                    <span class="top-rank">#{i + 1}</span>
+                    <span class="top-name">{l.name}</span>
+                    <span class="top-count">{l.use_count}×</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        <!-- LUT Editor -->
+        <h2 class="subhead">LUT Editor <span class="hint">Build or edit · always saves as new LUT</span></h2>
+        <div class="lut-editor">
+          <div class="lut-editor__list">
+            <div class="lut-editor__list-head">
+              <strong>Existing LUTs</strong>
+              <button class="admin-btn admin-btn--primary" id="btn-new-lut">+ New LUT</button>
+            </div>
+            <ul class="lut-list" id="lut-list">
+              {initialJson.luts.map((l) => (
+                <li class="lut-list__item" data-lut-id={l.id}>
+                  <div class="lut-list__main">
+                    <span class="lut-list__name">{l.name}</span>
+                    <span class="lut-list__meta">
+                      {l.kind === 'builtin' && <span class="chip chip--readonly">built-in</span>}
+                      {l.kind === 'synthesised' && <span class="chip chip--synth">synth</span>}
+                      {l.parent_id && <span class="chip chip--parent">from #{l.parent_id}</span>}
+                    </span>
+                  </div>
+                  <div class="lut-list__actions">
+                    <button class="admin-btn btn-load-lut">Edit as new</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div class="lut-editor__workspace" id="lut-workspace">
+            <div class="lut-editor__empty">Select a LUT on the left to edit, or click "+ New LUT".</div>
+          </div>
+        </div>
+
+        <!-- Preset management (kept from old /admin/presets) -->
+        <h2 class="subhead">Your presets <span class="hint">Click to expand</span></h2>
+        {initialJson.userPresets.length === 0 ? (
+          <div class="admin-empty">
+            <p>You haven't saved any presets yet.</p>
+            <p class="hint">Open an image in the editor, dial in a look, then click <strong>Save</strong> next to the preset dropdown.</p>
+          </div>
+        ) : (
+          <div class="preset-list" id="user-grid">
+            {initialJson.userPresets.map((p) => (
+              <details class="preset-card" data-preset-id={p.id}>
+                <summary class="preset-card__summary">
+                  <span class="preset-card__name">{p.name}</span>
+                  <span class="preset-card__date">{new Date(p.created_at + 'Z').toLocaleDateString()}</span>
+                </summary>
+                <div class="preset-card__body">
+                  <div class="preset-card__row">
+                    <label>Rename</label>
+                    <input type="text" class="preset-rename" value={p.name} maxlength="60" />
+                  </div>
+                  <div class="preset-sliders">
+                    {PRESET_SLIDER_KEYS.map((k) => (
+                      <div class="slider" data-key={k}>
+                        <label>{SLIDER_META[k].label}</label>
+                        <input type="range"
+                          min={SLIDER_META[k].min}
+                          max={SLIDER_META[k].max}
+                          step={SLIDER_META[k].step}
+                          value={p.params[k] || 0} />
+                        <span class="val">{p.params[k] || 0}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div class="preset-card__actions">
+                    <button class="admin-btn admin-btn--primary btn-save-preset">Save changes</button>
+                    <button class="admin-btn admin-btn--danger btn-delete-preset">Delete</button>
+                    <span class="status"></span>
+                  </div>
+                </div>
+              </details>
+            ))}
+          </div>
+        )}
+
+        <!-- Built-in presets reference -->
+        <h2 class="subhead">Built-in presets <span class="hint">Read-only</span></h2>
+        <div class="preset-grid">
+          {initialJson.builtins.map((p) => (
+            <article class="preset-card preset-card--builtin">
+              <header class="preset-card__head">
+                <h3>{p.name}</h3>
+                <code class="preset-card__key">{p.builtin_key}</code>
+              </header>
+              <ul class="preset-params">
+                {PRESET_SLIDER_KEYS.filter((k) => p.params[k] && p.params[k] !== 0).map((k) => (
+                  <li><span class="pp-k">{SLIDER_META[k].label}</span><span class="pp-v">{p.params[k]}</span></li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
+      </section>
+    </main>
+
+    <script type="module" define:vars={{
+      luts: initialJson.luts,
+      SLIDER_META: SLIDER_META,
+      LUT_SLIDER_KEYS: LUT_SLIDER_KEYS,
+      PRESET_SLIDER_KEYS: PRESET_SLIDER_KEYS,
+    }}>
+      const lutSelect = document.getElementById('lut-list');
+      const workspace = document.getElementById('lut-workspace');
+      const btnNew = document.getElementById('btn-new-lut');
+      let currentBaseLutId = null;
+
+      function sliderInputHtml(k) {
+        const m = SLIDER_META[k];
+        return `<div class="slider" data-key="${k}">
+          <label>${m.label}</label>
+          <input type="range" min="${m.min}" max="${m.max}" step="${m.step}" value="0" />
+          <span class="val">0</span>
+        </div>`;
+      }
+
+      function wireLutEditorSliders() {
+        workspace.querySelectorAll('.lut-sliders .slider').forEach((wrap) => {
+          const input = wrap.querySelector('input');
+          const valEl = wrap.querySelector('.val');
+          if (!input || !valEl) return;
+          input.addEventListener('input', () => { valEl.textContent = input.value; });
+        });
+      }
+
+      function openEditor(initialParams, baseLutId, baseName) {
+        currentBaseLutId = baseLutId;
+        const baseLabel = baseLutId ? `Editing from "${baseName}" — saving will create a new LUT, original untouched` : 'New LUT (no base)';
+        workspace.innerHTML = `
+          <div class="lut-editor__head">
+            <div class="lut-editor__row">
+              <label>LUT name</label>
+              <input type="text" id="lut-name" maxlength="60" placeholder="${baseLutId ? 'Copy of ' + baseName : 'My new LUT'}" />
+            </div>
+            <div class="lut-editor__base">
+              <span class="hint">${baseLabel}</span>
+            </div>
+          </div>
+          <div class="lut-sliders">
+            ${LUT_SLIDER_KEYS.map(sliderInputHtml).join('')}
+          </div>
+          <div class="lut-editor__actions">
+            <button class="admin-btn admin-btn--primary" id="btn-save-lut">Save as new LUT</button>
+            <span class="status" id="lut-status"></span>
+          </div>
+        `;
+        // Hydrate slider values from initialParams
+        for (const k of LUT_SLIDER_KEYS) {
+          const v = initialParams && initialParams[k] != null ? Number(initialParams[k]) : 0;
+          const input = workspace.querySelector(`.lut-sliders .slider[data-key="${k}"] input`);
+          if (input) {
+            input.value = String(v);
+            const valEl = workspace.querySelector(`.lut-sliders .slider[data-key="${k}"] .val`);
+            if (valEl) valEl.textContent = String(v);
+          }
+        }
+        wireLutEditorSliders();
+        const btnSave = document.getElementById('btn-save-lut');
+        btnSave.addEventListener('click', saveLut);
+      }
+
+      async function saveLut() {
+        const nameInput = document.getElementById('lut-name');
+        const statusEl = document.getElementById('lut-status');
+        const name = nameInput.value.trim();
+        if (!name) {
+          statusEl.textContent = 'Name required.';
+          statusEl.className = 'status err';
+          return;
+        }
+        const params = {};
+        for (const k of LUT_SLIDER_KEYS) {
+          const input = workspace.querySelector(`.lut-sliders .slider[data-key="${k}"] input`);
+          if (input) params[k] = Number(input.value) || 0;
+        }
+        statusEl.textContent = 'Synthesising…';
+        statusEl.className = 'status';
+        try {
+          const r = await fetch('/api/luts/synth', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name, params, base_lut_id: currentBaseLutId }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data.error || r.statusText);
+          statusEl.textContent = 'Saved as LUT #' + data.lut.id + '.';
+          statusEl.classList.add('ok');
+          // Reload page after 1s so the new LUT appears in the list
+          setTimeout(() => location.reload(), 900);
+        } catch (e) {
+          statusEl.textContent = 'Save failed: ' + e.message;
+          statusEl.classList.add('err');
+        }
+      }
+
+      // "Edit as new" button on each LUT list item
+      lutSelect.querySelectorAll('.btn-load-lut').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const li = btn.closest('.lut-list__item');
+          const id = Number(li.dataset.lutId);
+          const lut = luts.find((l) => l.id === id);
+          if (!lut) return;
+          const initialParams = lut.synth_params || {};
+          openEditor(initialParams, id, lut.name);
+        });
+      });
+
+      btnNew.addEventListener('click', () => {
+        openEditor({}, null, null);
+      });
+
+      // Preset sliders wiring (same as old page)
+      document.querySelectorAll('.preset-sliders .slider').forEach((wrap) => {
+        const input = wrap.querySelector('input');
+        const valEl = wrap.querySelector('.val');
+        if (!input || !valEl) return;
+        input.addEventListener('input', () => { valEl.textContent = input.value; });
+      });
+
+      async function patchPreset(id, body) {
+        const r = await fetch('/api/presets?id=' + id, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || r.statusText);
+        return data;
+      }
+      async function deletePreset(id) {
+        const r = await fetch('/api/presets?id=' + id, { method: 'DELETE' });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || r.statusText);
+        return data;
+      }
+
+      document.querySelectorAll('.preset-card[data-preset-id]').forEach((card) => {
+        const id = Number(card.dataset.presetId);
+        const statusEl = card.querySelector('.status');
+        const renameInput = card.querySelector('.preset-rename');
+        const btnSave = card.querySelector('.btn-save-preset');
+        const btnDelete = card.querySelector('.btn-delete-preset');
+        btnSave.addEventListener('click', async () => {
+          btnSave.disabled = true;
+          statusEl.textContent = 'Saving…';
+          statusEl.className = 'status';
+          try {
+            const params = {};
+            for (const k of PRESET_SLIDER_KEYS) {
+              const input = card.querySelector('.slider[data-key="' + k + '"] input');
+              if (input) params[k] = Number(input.value) || 0;
+            }
+            await patchPreset(id, {
+              name: renameInput.value.trim() || undefined,
+              params,
+            });
+            statusEl.textContent = 'Saved.';
+            statusEl.classList.add('ok');
+            const nameEl = card.querySelector('.preset-card__name');
+            if (nameEl && renameInput.value.trim()) nameEl.textContent = renameInput.value.trim();
+          } catch (e) {
+            statusEl.textContent = 'Save failed: ' + e.message;
+            statusEl.classList.add('err');
+          } finally {
+            btnSave.disabled = false;
+          }
+        });
+        btnDelete.addEventListener('click', async () => {
+          if (!confirm('Delete this preset?')) return;
+          btnDelete.disabled = true;
+          try {
+            await deletePreset(id);
+            card.style.transition = 'opacity 200ms';
+            card.style.opacity = '0';
+            setTimeout(() => card.remove(), 220);
+          } catch (e) {
+            statusEl.textContent = 'Delete failed: ' + e.message;
+            statusEl.classList.add('err');
+            btnDelete.disabled = false;
+          }
+        });
+      });
+    </script>
+
+    <style>
+      :root { color-scheme: dark; }
+      .admin-body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #050505; color: #fafafa; min-height: 100vh; }
+      .admin-header { display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 2rem; border-bottom: 1px solid #1a1a1a; position: sticky; top: 0; background: rgba(5,5,5,0.85); backdrop-filter: blur(12px); z-index: 50; }
+      .admin-header__brand { color: #fafafa; text-decoration: none; font-weight: 700; font-size: 1.1rem; }
+      .admin-header__nav { display: flex; align-items: center; gap: 1.25rem; }
+      .admin-header__back { color: #a3a3a3; text-decoration: none; font-size: 0.9rem; }
+      .admin-header__back:hover { color: #fafafa; }
+      .admin-header__user { color: #a3a3a3; font-size: 0.9rem; }
+      .admin-header__logout { background: transparent; border: 1px solid #333; color: #a3a3a3; padding: 0.4rem 0.75rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+      .admin-main { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+      .admin-section__head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 2rem; }
+      .admin-section__head h1 { margin: 0 0 0.25rem 0; font-size: 1.75rem; }
+      .admin-section__sub { color: #737373; margin: 0; font-size: 0.95rem; }
+      .subhead { font-size: 0.95rem; font-weight: 600; color: #d4d4d4; margin: 2.5rem 0 0.75rem 0; display: flex; align-items: center; gap: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+      .hint { color: #737373; font-size: 0.8rem; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+      /* Top 10 */
+      .top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+      .top-col { background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 12px; padding: 1rem; }
+      .top-col__h { margin: 0 0 0.75rem 0; font-size: 0.95rem; color: #d4d4d4; }
+      .top-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+      .top-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.6rem; background: #050505; border-radius: 6px; }
+      .top-rank { font-variant-numeric: tabular-nums; color: #525252; font-size: 0.85rem; min-width: 30px; }
+      .top-name { flex: 1; }
+      .top-count { color: #737373; font-size: 0.85rem; }
+      .empty-mini { color: #737373; margin: 0; font-size: 0.9rem; }
+
+      /* LUT editor */
+      .lut-editor { display: grid; grid-template-columns: 280px 1fr; gap: 1rem; align-items: start; }
+      .lut-editor__list { background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 12px; padding: 0.75rem; max-height: 600px; overflow-y: auto; }
+      .lut-editor__list-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.25rem 0.25rem 0.5rem; border-bottom: 1px solid #1a1a1a; }
+      .lut-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+      .lut-list__item { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.6rem; background: #050505; border-radius: 6px; }
+      .lut-list__main { display: flex; flex-direction: column; gap: 0.15rem; flex: 1; min-width: 0; }
+      .lut-list__name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .lut-list__meta { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+      .chip { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 999px; }
+      .chip--readonly { background: #1a1a1a; color: #737373; }
+      .chip--synth { background: #1e293b; color: #93c5fd; }
+      .chip--parent { background: #292524; color: #d6d3d1; }
+      .lut-editor__workspace { background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 12px; padding: 1.25rem; min-height: 360px; }
+      .lut-editor__empty { color: #737373; display: flex; align-items: center; justify-content: center; height: 100%; min-height: 320px; text-align: center; }
+      .lut-editor__head { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #1a1a1a; }
+      .lut-editor__row { display: flex; align-items: center; gap: 0.5rem; }
+      .lut-editor__row label { color: #a3a3a3; font-size: 0.85rem; min-width: 80px; }
+      .lut-editor__row input[type="text"] { flex: 1; background: #050505; border: 1px solid #262626; color: #fafafa; padding: 0.5rem 0.75rem; border-radius: 6px; font-family: inherit; font-size: 0.9rem; }
+      .lut-editor__row input[type="text"]:focus { outline: none; border-color: #3b82f6; }
+      .lut-editor__base { padding-left: 90px; }
+      .lut-sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1.25rem; margin-bottom: 1rem; }
+      .lut-sliders .slider { display: grid; grid-template-columns: 110px 1fr 36px; gap: 0.5rem; align-items: center; }
+      .lut-sliders label { color: #a3a3a3; font-size: 0.85rem; }
+      .lut-sliders input[type="range"] { width: 100%; accent-color: #3b82f6; }
+      .lut-sliders .val { font-variant-numeric: tabular-nums; font-size: 0.85rem; color: #d4d4d4; text-align: right; }
+      .lut-editor__actions { display: flex; align-items: center; gap: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #1a1a1a; }
+
+      /* Preset management (shared with old page) */
+      .admin-empty { background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 12px; padding: 2rem; text-align: center; }
+      .admin-empty p { margin: 0.25rem 0; color: #a3a3a3; }
+      .preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75rem; }
+      .preset-card { background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 12px; padding: 1rem; }
+      .preset-card--builtin { opacity: 0.85; }
+      .preset-card__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.75rem; }
+      .preset-card__head h3 { margin: 0; font-size: 1rem; }
+      .preset-card__key { font-size: 0.7rem; color: #525252; }
+      .preset-card__summary { display: flex; align-items: center; justify-content: space-between; cursor: pointer; list-style: none; }
+      .preset-card__summary::-webkit-details-marker { display: none; }
+      .preset-card__name { font-weight: 600; }
+      .preset-card__date { font-size: 0.8rem; color: #737373; }
+      .preset-card__body { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #1a1a1a; }
+      .preset-card__row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+      .preset-card__row label { color: #a3a3a3; font-size: 0.85rem; min-width: 70px; }
+      .preset-rename { flex: 1; background: #050505; border: 1px solid #262626; color: #fafafa; padding: 0.5rem 0.75rem; border-radius: 6px; font-family: inherit; font-size: 0.9rem; }
+      .preset-rename:focus { outline: none; border-color: #3b82f6; }
+      .preset-params { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; font-size: 0.75rem; }
+      .preset-params li { display: flex; gap: 0.25rem; }
+      .pp-k { color: #737373; }
+      .pp-v { color: #d4d4d4; font-variant-numeric: tabular-nums; }
+      .preset-sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1.25rem; margin-bottom: 1rem; }
+      .preset-sliders .slider { display: grid; grid-template-columns: 110px 1fr 36px; gap: 0.5rem; align-items: center; }
+      .preset-sliders label { color: #a3a3a3; font-size: 0.85rem; }
+      .preset-sliders input[type="range"] { width: 100%; accent-color: #3b82f6; }
+      .preset-sliders .val { font-variant-numeric: tabular-nums; font-size: 0.85rem; color: #d4d4d4; text-align: right; }
+      .preset-card__actions { display: flex; align-items: center; gap: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #1a1a1a; }
+
+      .admin-btn { background: #0a0a0a; border: 1px solid #262626; color: #fafafa; padding: 0.5rem 0.9rem; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 0.85rem; }
+      .admin-btn:hover { border-color: #404040; }
+      .admin-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .admin-btn--primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+      .admin-btn--primary:hover { background: #1d4ed8; }
+      .admin-btn--danger { background: transparent; border-color: #7f1d1d; color: #fca5a5; }
+      .admin-btn--danger:hover { background: #7f1d1d; color: #fff; }
+      .status { font-size: 0.8rem; color: #737373; }
+      .status.ok { color: #22c55e; }
+      .status.err { color: #ef4444; }
+      .preset-list { display: flex; flex-direction: column; gap: 0.5rem; }
+
+      @media (max-width: 900px) {
+        .top-grid, .lut-editor { grid-template-columns: 1fr; }
+        .lut-sliders, .preset-sliders { grid-template-columns: 1fr; }
+      }
+    </style>
+  </body>
+</html>

@@ -102,6 +102,21 @@ export function listAvailablePresets(username: string | null | undefined): Prese
     .all(username || '') as PresetRow[];
 }
 
+/**
+ * Top N presets by usage count from image_edits.params_json. The editor
+ * doesn't currently store preset_id in params_json (it applies via UI),
+ * so we approximate "top used" by counting how often each preset's
+ * params have been re-applied. Falls back to alphabetical order when
+ * no usage data exists.
+ *
+ * NOTE: This is a placeholder until preset_id gets recorded in edits.
+ * For now returns built-ins first, then user presets alphabetically.
+ */
+export function listTopPresets(username: string | null | undefined, n = 10): PresetRow[] {
+  ensureSchema();
+  return listAvailablePresets(username).slice(0, n);
+}
+
 export function getPresetById(id: number): PresetRow | undefined {
   ensureSchema();
   return getDb().prepare(`SELECT * FROM presets WHERE id = ?`).get(id) as PresetRow | undefined;

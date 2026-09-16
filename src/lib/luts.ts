@@ -24,7 +24,8 @@
  */
 import type Database from 'better-sqlite3';
 import { getDb } from './db';
-import { readFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, unlinkSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { applySlidersToRgb, formatCubeFile } from './slider-color';
 import { join } from 'node:path';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/app/uploads';
@@ -296,6 +297,14 @@ function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_luts_enabled ON luts(enabled_global);
   `);
+  // Idempotent ALTERs for columns added in later schema versions.
+  const cols = db.prepare("PRAGMA table_info(luts)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'parent_id')) {
+    db.exec(`ALTER TABLE luts ADD COLUMN parent_id INTEGER REFERENCES luts(id);`);
+  }
+  if (!cols.some((c) => c.name === 'synth_params_json')) {
+    db.exec(`ALTER TABLE luts ADD COLUMN synth_params_json TEXT;`);
+  }
   // Seed built-in rows if missing (so they have stable ids across restarts).
   const upsert = db.prepare(`
     INSERT INTO luts (name, kind, builtin_key, size, enabled_global)
@@ -311,12 +320,14 @@ function ensureSchema() {
 export type LutRow = {
   id: number;
   name: string;
-  kind: 'builtin' | 'uploaded';
+  kind: 'builtin' | 'uploaded' | 'synthesised';
   builtin_key: string | null;
   file_path: string | null;
   size: number;
   enabled_global: 0 | 1;
   uploaded_by: string | null;
+  parent_id: number | null;
+  synth_params_json: string | null;
   created_at: string;
 };
 
@@ -364,6 +375,78 @@ export function uploadLut(name: string, filePath: string, uploadedBy: string, si
   `).run(name, filePath, size, uploadedBy);
   _dataCache.delete(Number(info.lastInsertRowid));
   return db.prepare(`SELECT * FROM luts WHERE id = ?`).get(info.lastInsertRowid) as LutRow;
+}
+
+/**
+ * Synthesise a 3D LUT from slider ops applied to either an identity grid
+ * or a base LUT. Writes a .cube file under UPLOAD_DIR/luts/<uuid>.cube and
+ * inserts a row with kind='synthesised' and parent_id = baseLutId (if any).
+ */
+export function synthesizeLut(
+  name: string,
+  params: Record<string, any>,
+  baseLutId: number | null,
+  uploadedBy: string,
+  size = 33,
+): LutRow {
+  ensureSchema();
+  ensureLutDir();
+  let baseLookup: ((r: number, g: number, b: number) => [number, number, number]) | null = null;
+  if (baseLutId) {
+    const baseRow = getLutById(baseLutId);
+    if (baseRow) {
+      const baseData = getLutData(baseRow);
+      baseLookup = (r, g, b) => applyLutTrilinear(baseData.size, baseData.data, r, g, b);
+    }
+  }
+  const lookup = (r: number, g: number, b: number): [number, number, number] => {
+    let rr = r, gg = g, bb = b;
+    if (baseLookup) [rr, gg, bb] = baseLookup(rr, gg, bb);
+    return applySlidersToRgb(rr, gg, bb, params);
+  };
+  const cubeText = formatCubeFile(size, lookup, name);
+  const uuid = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const relPath = `luts/${uuid}.cube`;
+  const absPath = join(UPLOAD_DIR, relPath);
+  writeFileSync(absPath, cubeText, 'utf8');
+  const db = getDb();
+  const info = db.prepare(`
+    INSERT INTO luts (name, kind, file_path, size, enabled_global, uploaded_by, parent_id, synth_params_json)
+    VALUES (?, 'synthesised', ?, ?, 1, ?, ?, ?)
+  `).run(name, relPath, size, uploadedBy, baseLutId, JSON.stringify(params));
+  const newId = Number(info.lastInsertRowid);
+  _dataCache.delete(newId);
+  return db.prepare(`SELECT * FROM luts WHERE id = ?`).get(newId) as LutRow;
+}
+
+/** Return the params that produced a synthesised LUT, or null if not synthesised. */
+export function getLutSynthParams(id: number): Record<string, any> | null {
+  const row = getLutById(id);
+  if (!row || row.kind !== 'synthesised' || !row.synth_params_json) return null;
+  try { return JSON.parse(row.synth_params_json); } catch { return null; }
+}
+
+/**
+ * Top N LUTs by usage count from image_edits.params_json. Built-ins
+ * always appear (with their natural rank) even if not yet used.
+ */
+export function listTopLuts(n = 10): Array<LutRow & { use_count: number }> {
+  ensureSchema();
+  const db = getDb();
+  const usedRows = db.prepare(`
+    SELECT json_extract(params_json, '$.lut_id') as lid, COUNT(*) as c
+    FROM image_edits
+    WHERE json_extract(params_json, '$.lut_id') IS NOT NULL
+      AND json_extract(params_json, '$.lut_id') > 0
+    GROUP BY lid
+    ORDER BY c DESC
+  `).all() as Array<{ lid: number; c: number }>;
+  const usage = new Map(usedRows.map((r) => [r.lid, r.c]));
+  const all = db.prepare(`SELECT * FROM luts WHERE enabled_global = 1 ORDER BY name ASC`).all() as LutRow[];
+  return all
+    .map((l) => ({ ...l, use_count: usage.get(l.id) || 0 }))
+    .sort((a, b) => b.use_count - a.use_count || a.name.localeCompare(b.name))
+    .slice(0, n);
 }
 
 export function deleteLut(id: number): boolean {
