@@ -58,6 +58,7 @@ services:
       - WATERMARK_TEXT=${WATERMARK_TEXT:-}
       - WATERMARK_OPACITY=${WATERMARK_OPACITY:-30}
       - WATERMARK_POSITION=${WATERMARK_POSITION:-southeast}
+      - SNAPPYDO_RAW_PREVIEW_RENDER=${SNAPPYDO_RAW_PREVIEW_RENDER:-0}
       # NVIDIA driver capabilities — needs opencl + compute + utility for
       # darktable-cli GPU acceleration. Without 'opencl' the toolkit
       # doesn't mount /etc/OpenCL/vendors/nvidia.icd and darktable sees
