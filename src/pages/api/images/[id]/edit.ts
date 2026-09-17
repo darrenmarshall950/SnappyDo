@@ -39,6 +39,7 @@ import { readAdminSession } from '../../../../lib/auth';
 import { imgproxyUrl } from '../../../../lib/imgproxy';
 import { buildDarktableXmp, readCameraWb } from '../../../../lib/darktable-xmp';
 import { applyHslToRgb, applyColorGradingToRgb, isHslFlat } from '../../../../lib/hsl';
+import { applySplitToningToRgb, isSplitToningFlat, applyGrainToRgb, isGrainFlat } from '../../../../lib/effects';
 
 export const prerender = false;
 
@@ -215,18 +216,51 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
      colorGradingParams.highlights_intensity > 0 ||
      colorGradingParams.global_intensity > 0);
 
-  if (hslNeedsProcessing || cgNeedsProcessing) {
+  const splitToningParams = {
+    shadows_hue: Number(params.st_shadows_hue) || 0,
+    shadows_saturation: Number(params.st_shadows_saturation) || 0,
+    highlights_hue: Number(params.st_highlights_hue) || 0,
+    highlights_saturation: Number(params.st_highlights_saturation) || 0,
+    balance: Number(params.st_balance) || 0,
+  };
+  const grainParams = {
+    amount: Number(params.grain_amount) || 0,
+    size: Number(params.grain_size) || 25,
+  };
+  const dehazeVal = Number(params.dehaze) || 0;
+
+  const stNeedsProcessing = !isSplitToningFlat(splitToningParams);
+  const grainNeedsProcessing = !isGrainFlat(grainParams);
+  const needsPixelLoop = hslNeedsProcessing || cgNeedsProcessing || stNeedsProcessing || grainNeedsProcessing || dehazeVal !== 0;
+
+  if (needsPixelLoop) {
     const rgba = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const { data, info } = rgba;
     const pxCount = info.width * info.height;
+    const timeMs = Date.now();
     for (let i = 0; i < pxCount; i++) {
       const base = i * 4;
+      const x = i % info.width;
+      const y = Math.floor(i / info.width);
       let r = data[base], g = data[base + 1], b = data[base + 2];
       if (hslNeedsProcessing) {
         [r, g, b] = applyHslToRgb(r, g, b, hslData);
       }
       if (cgNeedsProcessing) {
         [r, g, b] = applyColorGradingToRgb(r, g, b, colorGradingParams);
+      }
+      if (dehazeVal !== 0) {
+        const haze = Math.min(r, Math.min(g, b));
+        const amount = dehazeVal * 0.003 * haze;
+        r = Math.max(0, r - amount);
+        g = Math.max(0, g - amount);
+        b = Math.max(0, b - amount);
+      }
+      if (stNeedsProcessing) {
+        [r, g, b] = applySplitToningToRgb(r, g, b, splitToningParams);
+      }
+      if (grainNeedsProcessing) {
+        [r, g, b] = applyGrainToRgb(r, g, b, grainParams, x, y, timeMs);
       }
       data[base] = r; data[base + 1] = g; data[base + 2] = b;
     }

@@ -73,6 +73,14 @@ const initialParams = latestEdit ? JSON.parse(latestEdit.params_json) : {
   cg_shadows_intensity: 0, cg_midtones_intensity: 0,
   cg_highlights_intensity: 0, cg_global_intensity: 0,
   cg_mode: 'saturation',
+  // Split Toning
+  st_shadows_hue: 0, st_shadows_saturation: 0,
+  st_highlights_hue: 0, st_highlights_saturation: 0,
+  st_balance: 0,
+  // Grain
+  grain_amount: 0, grain_size: 25,
+  // Effects
+  dehaze: 0,
 };
 
 // Source URL — use the original file directly so we get full resolution.
@@ -657,6 +665,13 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
     .cg-global-section { display: flex; gap: 8px; margin-top: 6px; }
     .cg-global-section .cg-wheel-group { flex-direction: row; align-items: center; }
 
+    /* ── Effects (Split Toning, Grain) ──────────────────── */
+    .fx-details { margin-bottom: 6px; }
+    .fx-details summary { cursor: pointer; padding: 4px 0; font-size: 12px; color: #aaa; }
+    .fx-details summary:hover { color: #fafafa; }
+    .st-section { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+    .st-subhead { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+
     </style>
   </head>
   <body>
@@ -821,7 +836,6 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           <h3>Effects <button id="btn-reset-fx">reset</button></h3>
           <div class="slider" data-key="sharpen">
             <label>Sharpen</label>
-            <!-- Slider range 0..150: 0=off, 100=previous max, 150=strong. -->
             <input type="range" min="0" max="200" step="1" />
             <span class="val">0</span>
           </div>
@@ -830,6 +844,58 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
             <input type="range" min="0" max="100" step="1" />
             <span class="val">0</span>
           </div>
+          <div class="slider" data-key="dehaze">
+            <label>Dehaze</label>
+            <input type="range" min="-100" max="100" step="1" />
+            <span class="val">0</span>
+          </div>
+
+          <details class="fx-details">
+            <summary>Split Toning</summary>
+            <div class="st-section">
+              <div class="st-subhead">Shadows</div>
+              <div class="slider" data-key="st_shadows_hue">
+                <label>Hue</label>
+                <input type="range" min="0" max="360" step="1" />
+                <span class="val">0</span>
+              </div>
+              <div class="slider" data-key="st_shadows_saturation">
+                <label>Saturation</label>
+                <input type="range" min="0" max="100" step="1" />
+                <span class="val">0</span>
+              </div>
+              <div class="st-subhead">Highlights</div>
+              <div class="slider" data-key="st_highlights_hue">
+                <label>Hue</label>
+                <input type="range" min="0" max="360" step="1" />
+                <span class="val">0</span>
+              </div>
+              <div class="slider" data-key="st_highlights_saturation">
+                <label>Saturation</label>
+                <input type="range" min="0" max="100" step="1" />
+                <span class="val">0</span>
+              </div>
+              <div class="slider" data-key="st_balance">
+                <label>Balance</label>
+                <input type="range" min="-100" max="100" step="1" />
+                <span class="val">0</span>
+              </div>
+            </div>
+          </details>
+
+          <details class="fx-details">
+            <summary>Grain</summary>
+            <div class="slider" data-key="grain_amount">
+              <label>Amount</label>
+              <input type="range" min="0" max="100" step="1" />
+              <span class="val">0</span>
+            </div>
+            <div class="slider" data-key="grain_size">
+              <label>Size</label>
+              <input type="range" min="0" max="100" step="1" />
+              <span class="val">25</span>
+            </div>
+          </details>
         </section>
 
         {isRaw && (
@@ -1907,6 +1973,7 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           shadows: state.shadows,
           whites: state.whites,
           blacks: state.blacks,
+          dehaze: (state as any).dehaze ?? 0,
         });
         
         // Apply tone curve
@@ -1940,6 +2007,21 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           mode: ((state as any).cg_mode as 'saturation' | 'luminance') ?? 'saturation',
         };
         webglPipeline.setHsl(hslData, colorGrading);
+
+        // Split Toning
+        webglPipeline.setSplitToning({
+          shadows_hue: (state as any).st_shadows_hue ?? 0,
+          shadows_saturation: (state as any).st_shadows_saturation ?? 0,
+          highlights_hue: (state as any).st_highlights_hue ?? 0,
+          highlights_saturation: (state as any).st_highlights_saturation ?? 0,
+          balance: (state as any).st_balance ?? 0,
+        });
+
+        // Grain
+        webglPipeline.setGrain({
+          amount: (state as any).grain_amount ?? 0,
+          size: (state as any).grain_size ?? 25,
+        });
 
 webglPipeline.render();
         return true;
@@ -2534,7 +2616,12 @@ webglPipeline.render();
       document.getElementById('btn-reset-light').onclick = () => resetKeys(['exposure','contrast','brightness']);
       document.getElementById('btn-reset-tone').onclick = () => resetKeys(['highlights','shadows','whites','blacks']);
       document.getElementById('btn-reset-color').onclick = () => resetKeys(['saturation','temp','tint']);
-      document.getElementById('btn-reset-fx').onclick = () => { resetKeys(['sharpen','vignette']); resetCgKeys(); };
+      document.getElementById('btn-reset-fx').onclick = () => {
+  resetKeys(['sharpen','vignette','dehaze','st_shadows_hue','st_shadows_saturation',
+             'st_highlights_hue','st_highlights_saturation','st_balance',
+             'grain_amount','grain_size']);
+  resetCgKeys();
+};
 
       function resetCgKeys() {
         const RANGES = ['red','orange','yellow','green','aqua','blue','purple','magenta'];

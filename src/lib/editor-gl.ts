@@ -212,15 +212,32 @@ void main() {
 `;
 
 
-// ─── HSL Color Mixer + Color Grading fragment shader ─────────────────────
-// Applied AFTER the curve pass. Handles per-range HSL adjustments and
-// Lightroom-style three-way color grading.
+// ─── HSL Color Mixer + Color Grading + Split Toning + Effects ────────────
+// Applied AFTER the curve pass. Handles per-range HSL adjustments,
+// Lightroom-style three-way color grading, split toning, grain, dehaze.
 const HSL_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D uSource;
+
+// ── Time for grain animation ─────────────────────────────────────────────────
+uniform float uTime;
+
+// ── Split Toning ─────────────────────────────────────────────────────────────
+uniform float uStShadowsHue;
+uniform float uStShadowsSat;
+uniform float uStHighlightsHue;
+uniform float uStHighlightsSat;
+uniform float uStBalance;
+
+// ── Grain ────────────────────────────────────────────────────────────────────
+uniform float uGrainAmount;
+uniform float uGrainSize;
+
+// ── Dehaze ───────────────────────────────────────────────────────────────────
+uniform float uDehaze;
 
 // ── HSL helpers ─────────────────────────────────────────────────────────────
 vec3 rgb2hsl(vec3 c) {
@@ -351,6 +368,45 @@ void main() {
   }
 
   c = applyColorGrading(c);
+
+  // ── Split Toning ─────────────────────────────────────────────────────────
+  if (uStShadowsSat > 0.0 || uStHighlightsSat > 0.0 || uStBalance != 0.0) {
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    float pivot = 0.35 + uStBalance * 0.003;
+    float hlRatio = smoothstep(pivot - 0.1, pivot + 0.1, luma);
+
+    float shH = fract(uStShadowsHue / 360.0);
+    float shS = uStShadowsSat / 100.0;
+    vec3 shadowTint = hsl2rgb(vec3(shH, shS, 0.5));
+
+    float hiH = fract(uStHighlightsHue / 360.0);
+    float hiS = uStHighlightsSat / 100.0;
+    vec3 highlightTint = hsl2rgb(vec3(hiH, hiS, 0.5));
+
+    vec3 tint = mix(shadowTint, highlightTint, hlRatio);
+    float avgSat = (uStShadowsSat + uStHighlightsSat) / 200.0;
+    float blend = avgSat * 0.5;
+    c = c + (tint - 0.5) * blend;
+  }
+
+  // ── Dehaze ───────────────────────────────────────────────────────────────
+  if (uDehaze != 0.0) {
+    float haze = min(c.r, min(c.g, c.b));
+    float hazeAmount = uDehaze * 0.003 * haze;
+    c = c - hazeAmount;
+  }
+
+  // ── Grain ────────────────────────────────────────────────────────────────
+  if (uGrainAmount > 0.0) {
+    float seed = dot(vUv, vec2(12.9898, 78.233)) + uTime;
+    float noise = fract(sin(seed) * 43758.5453) - 0.5;
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    float grainWeight = mix(0.3, 1.0, luma);
+    float sizeScale = 1.0 + uGrainSize / 50.0;
+    float g = noise * (uGrainAmount / 100.0) * 2.0 * grainWeight * sizeScale;
+    c = c + g;
+  }
+
   fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }
 `;
@@ -375,6 +431,19 @@ export interface ColorGradingData {
   mode: 'saturation' | 'luminance';
 }
 
+export interface SplitToningData {
+  shadows_hue: number;
+  shadows_saturation: number;
+  highlights_hue: number;
+  highlights_saturation: number;
+  balance: number;
+}
+
+export interface GrainData {
+  amount: number;
+  size: number;
+}
+
 export interface WebGLPipelineState {
   exposure: number;
   contrast: number;
@@ -391,6 +460,12 @@ export interface WebGLPipelineState {
   hsl?: Record<string, HslRange>;
   /** Lightroom-style color grading. */
   colorGrading?: ColorGradingData;
+  /** Split Toning. */
+  splitToning?: SplitToningData;
+  /** Film Grain. */
+  grain?: GrainData;
+  /** Dehaze (-100 to +100). */
+  dehaze?: number;
 }
 
 export interface WebGLPipeline {
@@ -492,20 +567,42 @@ export interface WebGLPipeline {
   let _lastCurveB: Float32Array | null = null;
 
   // ── HSL + Color Grading state ─────────────────────────────────────────────
-  function isHslFlat(hslData: Record<string, HslRange>): boolean {
-    if (!hslData) return true;
-    for (const key of Object.keys(hslData)) {
-      const r = hslData[key];
-      if (Math.abs(r.h) > 1e-4 || Math.abs(r.s) > 1e-4 || Math.abs(r.l) > 1e-4) return false;
+  function isEffectsFlat(): boolean {
+    // HSL
+    if (lastState.hsl) {
+      for (const key of Object.keys(lastState.hsl)) {
+        const r = lastState.hsl[key];
+        if (Math.abs(r.h) > 1e-4 || Math.abs(r.s) > 1e-4 || Math.abs(r.l) > 1e-4) return false;
+      }
     }
+    // Color grading
+    const cg = lastState.colorGrading;
+    if (cg && (
+      (cg.shadows_intensity ?? 0) !== 0 ||
+      (cg.midtones_intensity ?? 0) !== 0 ||
+      (cg.highlights_intensity ?? 0) !== 0 ||
+      (cg.global_intensity ?? 0) !== 0
+    )) return false;
+    // Split toning
+    const st = lastState.splitToning;
+    if (st && (
+      Math.abs(st.shadows_hue) > 1e-4 ||
+      Math.abs(st.shadows_saturation) > 1e-4 ||
+      Math.abs(st.highlights_hue) > 1e-4 ||
+      Math.abs(st.highlights_saturation) > 1e-4 ||
+      Math.abs(st.balance) > 1e-4
+    )) return false;
+    // Grain
+    const gr = lastState.grain;
+    if (gr && Math.abs(gr.amount) > 1e-4) return false;
+    // Dehaze
+    if (lastState.dehaze && Math.abs(lastState.dehaze) > 1e-4) return false;
     return true;
   }
 
   function setHsl(hslData: Record<string, HslRange>, colorGrading?: ColorGradingData) {
     if (!ready || !gl) return;
-    hslIsFlat = isHslFlat(hslData) && !colorGrading;
-    // All HSL uniform values are uploaded every render() call from lastHslState
-    // so we just record the flag here.
+    // Flag is now computed in render() via isEffectsFlat()
   }
 
   function setCurves(curves: CurveData) {
@@ -558,6 +655,9 @@ export function createWebGLPipeline(): WebGLPipeline {
     curve: undefined,
     hsl: undefined,
     colorGrading: undefined,
+    splitToning: { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 },
+    grain: { amount: 0, size: 25 },
+    dehaze: 0,
   };
 
   // Cached HSL state for hsl pass uniforms
@@ -900,7 +1000,7 @@ export function createWebGLPipeline(): WebGLPipeline {
     }
 
     // ── Pass 3: HSL Color Mixer + Color Grading → canvas ───────────────────
-    if (!hslIsFlat && hslProg) {
+    if (!isEffectsFlat() && hslProg) {
       // Lazy-allocate hslFBO at canvas size (not needed but keeps structure)
       if (!hslFbo || !hslTex || hslTex.width !== w || hslTex.height !== h) {
         if (hslTex) gl.deleteTexture(hslTex);
@@ -935,7 +1035,7 @@ export function createWebGLPipeline(): WebGLPipeline {
           gl.uniform1f(gl.getUniformLocation(p, `uHsl${name}_s`), r.s / 100);
           gl.uniform1f(gl.getUniformLocation(p, `uHsl${name}_l`), r.l / 100);
         });
-        gl.uniform1i(gl.getUniformLocation(p, 'uHslActive'), hslIsFlat ? 0 : 1);
+        gl.uniform1i(gl.getUniformLocation(p, 'uHslActive'), isEffectsFlat() ? 0 : 1);
 
         if (cg) {
           gl.uniform3fv(gl.getUniformLocation(p, 'uCgShadowsColour'), [(cg.shadows_colour[0] ?? 0)/255, (cg.shadows_colour[1] ?? 0)/255, (cg.shadows_colour[2] ?? 0)/255]);
@@ -958,6 +1058,25 @@ export function createWebGLPipeline(): WebGLPipeline {
           gl.uniform1f(gl.getUniformLocation(p, 'uCgGlobalIntensity'), 0);
           gl.uniform1i(gl.getUniformLocation(p, 'uCgMode'), 0);
         }
+
+        // Split Toning
+        const st = lastState.splitToning || { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 };
+        gl.uniform1f(gl.getUniformLocation(p, 'uStShadowsHue'), st.shadows_hue);
+        gl.uniform1f(gl.getUniformLocation(p, 'uStShadowsSat'), st.shadows_saturation);
+        gl.uniform1f(gl.getUniformLocation(p, 'uStHighlightsHue'), st.highlights_hue);
+        gl.uniform1f(gl.getUniformLocation(p, 'uStHighlightsSat'), st.highlights_saturation);
+        gl.uniform1f(gl.getUniformLocation(p, 'uStBalance'), st.balance);
+
+        // Grain
+        const gr = lastState.grain || { amount: 0, size: 25 };
+        gl.uniform1f(gl.getUniformLocation(p, 'uGrainAmount'), gr.amount);
+        gl.uniform1f(gl.getUniformLocation(p, 'uGrainSize'), gr.size);
+
+        // Dehaze
+        gl.uniform1f(gl.getUniformLocation(p, 'uDehaze'), lastState.dehaze || 0);
+
+        // Time (for grain animation)
+        gl.uniform1f(gl.getUniformLocation(p, 'uTime'), performance.now() / 1000);
       }, null, w, h);
     }
 
@@ -993,6 +1112,6 @@ export function createWebGLPipeline(): WebGLPipeline {
     ready = false;
   }
 
-  return { init, setSource, setLut, setCurves, setHsl, updateState, render, destroy,
+  return { init, setSource, setLut, setCurves, setHsl, setSplitToning, setGrain, updateState, render, destroy,
            get ready() { return ready; } };
 }

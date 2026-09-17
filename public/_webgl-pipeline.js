@@ -1,5 +1,4 @@
-// src/lib/editor-gl.ts
-var VERT_SRC = `#version 300 es
+const VERT_SRC = `#version 300 es
 precision highp float;
 in vec2 aPos;
 in vec2 aUv;
@@ -9,7 +8,7 @@ void main() {
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 `;
-var SLIDERS_LUT_FRAG = `#version 300 es
+const SLIDERS_LUT_FRAG = `#version 300 es
 precision highp float;
 precision highp sampler3D;
 in vec2 vUv;
@@ -65,7 +64,7 @@ void main() {
   fragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }
 `;
-var BLUR_H_FRAG = `#version 300 es
+const BLUR_H_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
@@ -88,7 +87,7 @@ void main() {
   fragColor = vec4(sum, 1.0);
 }
 `;
-var BLUR_V_FRAG = `#version 300 es
+const BLUR_V_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
@@ -110,7 +109,7 @@ void main() {
   fragColor = vec4(sum, 1.0);
 }
 `;
-var UNSHARP_FRAG = `#version 300 es
+const UNSHARP_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
@@ -127,7 +126,7 @@ void main() {
   fragColor = vec4(clamp(result, 0.0, 1.0), 1.0);
 }
 `;
-var CURVE_FRAG = `#version 300 es
+const CURVE_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
@@ -148,12 +147,29 @@ void main() {
   fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }
 `;
-var HSL_FRAG = `#version 300 es
+const HSL_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D uSource;
+
+// \u2500\u2500 Time for grain animation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+uniform float uTime;
+
+// \u2500\u2500 Split Toning \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+uniform float uStShadowsHue;
+uniform float uStShadowsSat;
+uniform float uStHighlightsHue;
+uniform float uStHighlightsSat;
+uniform float uStBalance;
+
+// \u2500\u2500 Grain \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+uniform float uGrainAmount;
+uniform float uGrainSize;
+
+// \u2500\u2500 Dehaze \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+uniform float uDehaze;
 
 // \u2500\u2500 HSL helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 vec3 rgb2hsl(vec3 c) {
@@ -284,20 +300,59 @@ void main() {
   }
 
   c = applyColorGrading(c);
+
+  // \u2500\u2500 Split Toning \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  if (uStShadowsSat > 0.0 || uStHighlightsSat > 0.0 || uStBalance != 0.0) {
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    float pivot = 0.35 + uStBalance * 0.003;
+    float hlRatio = smoothstep(pivot - 0.1, pivot + 0.1, luma);
+
+    float shH = fract(uStShadowsHue / 360.0);
+    float shS = uStShadowsSat / 100.0;
+    vec3 shadowTint = hsl2rgb(vec3(shH, shS, 0.5));
+
+    float hiH = fract(uStHighlightsHue / 360.0);
+    float hiS = uStHighlightsSat / 100.0;
+    vec3 highlightTint = hsl2rgb(vec3(hiH, hiS, 0.5));
+
+    vec3 tint = mix(shadowTint, highlightTint, hlRatio);
+    float avgSat = (uStShadowsSat + uStHighlightsSat) / 200.0;
+    float blend = avgSat * 0.5;
+    c = c + (tint - 0.5) * blend;
+  }
+
+  // \u2500\u2500 Dehaze \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  if (uDehaze != 0.0) {
+    float haze = min(c.r, min(c.g, c.b));
+    float hazeAmount = uDehaze * 0.003 * haze;
+    c = c - hazeAmount;
+  }
+
+  // \u2500\u2500 Grain \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  if (uGrainAmount > 0.0) {
+    float seed = dot(vUv, vec2(12.9898, 78.233)) + uTime;
+    float noise = fract(sin(seed) * 43758.5453) - 0.5;
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    float grainWeight = mix(0.3, 1.0, luma);
+    float sizeScale = 1.0 + uGrainSize / 50.0;
+    float g = noise * (uGrainAmount / 100.0) * 2.0 * grainWeight * sizeScale;
+    c = c + g;
+  }
+
   fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }
 `;
-var curveTexR = null;
-var curveTexG = null;
-var curveTexB = null;
-var curveFbo = null;
-var curveTex = null;
-var curveIsIdentity = true;
-var hslProg = null;
-var hslFbo = null;
-var hslTex = null;
-var hslIsFlat = true;
-var _identityLut = new Float32Array(256);
+let curveTexR = null;
+let curveTexG = null;
+let curveTexB = null;
+let curveFbo = null;
+let curveTex = null;
+let curveIsIdentity = true;
+let hslProg = null;
+let hslFbo = null;
+let hslTex = null;
+let hslIsFlat = true;
+const _identityLut = new Float32Array(256);
 for (let i = 0; i < 256; i++) _identityLut[i] = i / 255;
 function _buildLut(ch) {
   if (!ch || ch.length === 0) return new Float32Array(_identityLut);
@@ -354,20 +409,27 @@ function _float32Eq(a, b) {
   for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 1e-6) return false;
   return true;
 }
-var _lastCurveR = null;
-var _lastCurveG = null;
-var _lastCurveB = null;
-function isHslFlat(hslData) {
-  if (!hslData) return true;
-  for (const key of Object.keys(hslData)) {
-    const r = hslData[key];
-    if (Math.abs(r.h) > 1e-4 || Math.abs(r.s) > 1e-4 || Math.abs(r.l) > 1e-4) return false;
+let _lastCurveR = null;
+let _lastCurveG = null;
+let _lastCurveB = null;
+function isEffectsFlat() {
+  if (lastState.hsl) {
+    for (const key of Object.keys(lastState.hsl)) {
+      const r = lastState.hsl[key];
+      if (Math.abs(r.h) > 1e-4 || Math.abs(r.s) > 1e-4 || Math.abs(r.l) > 1e-4) return false;
+    }
   }
+  const cg = lastState.colorGrading;
+  if (cg && ((cg.shadows_intensity ?? 0) !== 0 || (cg.midtones_intensity ?? 0) !== 0 || (cg.highlights_intensity ?? 0) !== 0 || (cg.global_intensity ?? 0) !== 0)) return false;
+  const st = lastState.splitToning;
+  if (st && (Math.abs(st.shadows_hue) > 1e-4 || Math.abs(st.shadows_saturation) > 1e-4 || Math.abs(st.highlights_hue) > 1e-4 || Math.abs(st.highlights_saturation) > 1e-4 || Math.abs(st.balance) > 1e-4)) return false;
+  const gr = lastState.grain;
+  if (gr && Math.abs(gr.amount) > 1e-4) return false;
+  if (lastState.dehaze && Math.abs(lastState.dehaze) > 1e-4) return false;
   return true;
 }
 function setHsl(hslData, colorGrading) {
   if (!ready || !gl) return;
-  hslIsFlat = isHslFlat(hslData) && !colorGrading;
 }
 function setCurves(curves) {
   if (!ready || !gl) return;
@@ -416,7 +478,7 @@ function createWebGLPipeline() {
   let sharpenFboB = null;
   let sourceW = 0;
   let sourceH = 0;
-  const lastState = {
+  const lastState2 = {
     exposure: 0,
     contrast: 0,
     brightness: 0,
@@ -428,7 +490,10 @@ function createWebGLPipeline() {
     lut_intensity: 0,
     curve: void 0,
     hsl: void 0,
-    colorGrading: void 0
+    colorGrading: void 0,
+    splitToning: { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 },
+    grain: { amount: 0, size: 25 },
+    dehaze: 0
   };
   let lastHslState = {
     hsl: {},
@@ -629,7 +694,7 @@ function createWebGLPipeline() {
     gl2.activeTexture(gl2.TEXTURE0);
   }
   function updateState(state) {
-    Object.assign(lastState, state);
+    Object.assign(lastState2, state);
   }
   function runPass(prog, uniforms, targetFbo, width, height) {
     if (!gl2) return;
@@ -647,8 +712,8 @@ function createWebGLPipeline() {
     const w = canvasRef.width;
     const h = canvasRef.height;
     let outputTex = sourceTex;
-    if (lastState.sharpen > 0 && sharpenTexA && sharpenTexB && sharpenFboA && sharpenFboB) {
-      const amount = Math.max(0, Math.min(1, lastState.sharpen / 100));
+    if (lastState2.sharpen > 0 && sharpenTexA && sharpenTexB && sharpenFboA && sharpenFboB) {
+      const amount = Math.max(0, Math.min(1, lastState2.sharpen / 100));
       gl2.activeTexture(gl2.TEXTURE0);
       gl2.bindTexture(gl2.TEXTURE_2D, sourceTex);
       runPass(blurHProg, () => {
@@ -711,14 +776,14 @@ function createWebGLPipeline() {
       gl2.uniform1f(gl2.getUniformLocation(p, "uLutSize"), 32);
       gl2.uniform1f(
         gl2.getUniformLocation(p, "uLutIntensity"),
-        Math.max(0, Math.min(1, lastState.lut_intensity / 100))
+        Math.max(0, Math.min(1, lastState2.lut_intensity / 100))
       );
-      gl2.uniform1f(gl2.getUniformLocation(p, "uExposure"), lastState.exposure);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uContrast"), lastState.contrast);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uBrightness"), lastState.brightness);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uSaturation"), lastState.saturation);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uTemp"), lastState.temp);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uTint"), lastState.tint);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uExposure"), lastState2.exposure);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uContrast"), lastState2.contrast);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uBrightness"), lastState2.brightness);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uSaturation"), lastState2.saturation);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uTemp"), lastState2.temp);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uTint"), lastState2.tint);
     }, null, w, h);
     gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
     gl2.viewport(0, 0, w, h);
@@ -740,7 +805,7 @@ function createWebGLPipeline() {
         gl2.uniform1i(gl2.getUniformLocation(p, "uHasCurve"), 1);
       }, null, w, h);
     }
-    if (!hslIsFlat && hslProg) {
+    if (!isEffectsFlat() && hslProg) {
       if (!hslFbo || !hslTex || hslTex.width !== w || hslTex.height !== h) {
         if (hslTex) gl2.deleteTexture(hslTex);
         if (hslFbo) gl2.deleteFramebuffer(hslFbo);
@@ -761,8 +826,8 @@ function createWebGLPipeline() {
       runPass(hslProg, () => {
         const p = hslProg;
         gl2.uniform1i(gl2.getUniformLocation(p, "uSource"), 0);
-        const hsl = lastState.hsl || {};
-        const cg = lastState.colorGrading;
+        const hsl = lastState2.hsl || {};
+        const cg = lastState2.colorGrading;
         const RANGES = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
         RANGES.forEach((name, i) => {
           const r = hsl["hsl_" + name.toLowerCase()] || { h: 0, s: 0, l: 0 };
@@ -770,7 +835,7 @@ function createWebGLPipeline() {
           gl2.uniform1f(gl2.getUniformLocation(p, `uHsl${name}_s`), r.s / 100);
           gl2.uniform1f(gl2.getUniformLocation(p, `uHsl${name}_l`), r.l / 100);
         });
-        gl2.uniform1i(gl2.getUniformLocation(p, "uHslActive"), hslIsFlat ? 0 : 1);
+        gl2.uniform1i(gl2.getUniformLocation(p, "uHslActive"), isEffectsFlat() ? 0 : 1);
         if (cg) {
           gl2.uniform3fv(gl2.getUniformLocation(p, "uCgShadowsColour"), [(cg.shadows_colour[0] ?? 0) / 255, (cg.shadows_colour[1] ?? 0) / 255, (cg.shadows_colour[2] ?? 0) / 255]);
           gl2.uniform3fv(gl2.getUniformLocation(p, "uCgMidtonesColour"), [(cg.midtones_colour[0] ?? 0) / 255, (cg.midtones_colour[1] ?? 0) / 255, (cg.midtones_colour[2] ?? 0) / 255]);
@@ -792,6 +857,17 @@ function createWebGLPipeline() {
           gl2.uniform1f(gl2.getUniformLocation(p, "uCgGlobalIntensity"), 0);
           gl2.uniform1i(gl2.getUniformLocation(p, "uCgMode"), 0);
         }
+        const st = lastState2.splitToning || { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 };
+        gl2.uniform1f(gl2.getUniformLocation(p, "uStShadowsHue"), st.shadows_hue);
+        gl2.uniform1f(gl2.getUniformLocation(p, "uStShadowsSat"), st.shadows_saturation);
+        gl2.uniform1f(gl2.getUniformLocation(p, "uStHighlightsHue"), st.highlights_hue);
+        gl2.uniform1f(gl2.getUniformLocation(p, "uStHighlightsSat"), st.highlights_saturation);
+        gl2.uniform1f(gl2.getUniformLocation(p, "uStBalance"), st.balance);
+        const gr = lastState2.grain || { amount: 0, size: 25 };
+        gl2.uniform1f(gl2.getUniformLocation(p, "uGrainAmount"), gr.amount);
+        gl2.uniform1f(gl2.getUniformLocation(p, "uGrainSize"), gr.size);
+        gl2.uniform1f(gl2.getUniformLocation(p, "uDehaze"), lastState2.dehaze || 0);
+        gl2.uniform1f(gl2.getUniformLocation(p, "uTime"), performance.now() / 1e3);
       }, null, w, h);
     }
     gl2.bindVertexArray(null);
@@ -830,6 +906,8 @@ function createWebGLPipeline() {
     setLut,
     setCurves,
     setHsl,
+    setSplitToning,
+    setGrain,
     updateState,
     render,
     destroy,
