@@ -752,7 +752,7 @@
     if (!overlay) {
       overlay = document.createElement("div");
       overlay.id = "crop-overlay";
-      overlay.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;z-index:5;";
+      overlay.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;z-index:4;";
       canvas.parentNode.appendChild(overlay);
     }
     overlay.innerHTML = "";
@@ -1676,7 +1676,6 @@
   window.addEventListener("mouseup", onUp);
   window.addEventListener("touchend", onUp);
   function onDown(e) {
-    console.log("[editor] crop onDown: button=" + e.button + " cropBox=" + (cropBox ? "exists" : "null"));
     const p = getPos(e);
     if (cropBox) {
       const h = 14;
@@ -1749,7 +1748,6 @@
     cropBox.h = Math.max(2, Math.min(canvas.height - cropBox.y, cropBox.h));
   }
   function syncStateCrop() {
-    console.log("[editor] syncStateCrop: cropBox=" + JSON.stringify(cropBox) + " canvas=" + canvas.width + "x" + canvas.height);
     if (!cropBox) {
       state.crop = null;
       return;
@@ -1783,7 +1781,6 @@
     currentAspect = ratio;
   }
   function makeCropAtAspect() {
-    console.log("[editor] makeCropAtAspect: currentAspect=" + currentAspect);
     const imgR = canvas.width / canvas.height;
     const wByH = currentAspect || imgR;
     const sourceAspect = imgR;
@@ -1808,7 +1805,6 @@
   }
   document.querySelectorAll("[data-aspect]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      console.log("[editor] aspect click: asp=" + btn.dataset.aspect);
       const asp = btn.dataset.aspect;
       if (asp === "free") {
         setAspectPreset(null);

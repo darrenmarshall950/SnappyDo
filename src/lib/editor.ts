@@ -942,9 +942,10 @@ webglPipeline.render();
       function drawCropOverlayDom() {
         let overlay = document.getElementById('crop-overlay');
         if (!overlay) {
+          // Fallback: create one (shouldn't happen since HTML has it)
           overlay = document.createElement('div');
           overlay.id = 'crop-overlay';
-          overlay.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:5;';
+          overlay.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:4;';
           canvas.parentNode.appendChild(overlay);
         }
         overlay.innerHTML = '';
@@ -1985,7 +1986,7 @@ webglPipeline.render();
       window.addEventListener('mouseup', onUp);
       window.addEventListener('touchend', onUp);
       function onDown(e) {
-        console.log('[editor] crop onDown: button=' + e.button + ' cropBox=' + (cropBox ? 'exists' : 'null'));
+
         const p = getPos(e);
         // Hit-test corners of existing cropBox
         if (cropBox) {
@@ -2056,7 +2057,7 @@ webglPipeline.render();
         cropBox.h = Math.max(2, Math.min(canvas.height - cropBox.y, cropBox.h));
       }
       function syncStateCrop() {
-        console.log('[editor] syncStateCrop: cropBox=' + JSON.stringify(cropBox) + ' canvas=' + canvas.width + 'x' + canvas.height);
+
         if (!cropBox) { state.crop = null; return; }
         // Convert canvas-pixel cropBox to source UV. Since canvas aspect ==
         // source aspect in fit mode, canvas-normalized = source-normalized
@@ -2092,7 +2093,7 @@ webglPipeline.render();
         currentAspect = ratio;
       }
       function makeCropAtAspect() {
-        console.log('[editor] makeCropAtAspect: currentAspect=' + currentAspect);
+
         // Compute the source UV region representing a crop with aspect
         // `wByH` (W/H in source pixels), then translate to canvas pixels.
         //
@@ -2132,7 +2133,7 @@ webglPipeline.render();
       }
       document.querySelectorAll('[data-aspect]').forEach((btn) => {
         btn.addEventListener('click', () => {
-          console.log('[editor] aspect click: asp=' + btn.dataset.aspect);
+  
           const asp = btn.dataset.aspect;
           if (asp === 'free') { setAspectPreset(null); return; }
           const [aw, ah] = asp.split(':').map(Number);

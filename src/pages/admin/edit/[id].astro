@@ -237,6 +237,18 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
         max-height: 100%;
         line-height: 0;
       }
+      /* Crop overlay sits on top of the canvas, positioned to match canvas bounds.
+         JS rewrites innerHTML to draw dim-mask + white border + resize handles. */
+      #crop-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        pointer-events: none;
+        z-index: 4;
+      }
+      #crop-overlay > div {
+        pointer-events: auto;
+      }
       /* When zoomed, canvas-wrap becomes a viewport that may scroll
          (or we pan the canvas via JS). Position canvas absolutely so
          pan offsets translate correctly. */
