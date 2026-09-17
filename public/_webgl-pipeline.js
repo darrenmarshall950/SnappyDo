@@ -34,6 +34,11 @@ uniform float uCropH;
 uniform float uCAStrength;   // 0..100
 uniform float uCAX;          // -1..1
 uniform float uCAY;          // -1..1
+uniform float uVignette;     // 0..100, darken at edges
+uniform float uHighlights;    // -100..100, brighten/darken highlights
+uniform float uShadows;       // -100..100, brighten/darken shadows
+uniform float uWhites;        // -100..100, shift white point
+uniform float uBlacks;        // -100..100, shift black point
 
 // Rotate UV around center by angle in degrees
 vec2 rotateUv(vec2 uv, float angleDeg) {
@@ -49,11 +54,14 @@ vec2 applyStraightenAndCrop(vec2 uv) {
     uv = rotateUv(uv, uStraightenAngle);
   }
   if (uCropW > 0.0 && uCropH > 0.0) {
+    // Crop is specified in SOURCE UV. vUv is the canvas fragment position
+    // normalised to [0,1] which in fit mode equals source UV (canvas aspect
+    // matches source aspect). Sample source at vUv directly so only the
+    // cropped source region is rendered, preserving aspect.
     if (uv.x < uCropX || uv.x > uCropX + uCropW ||
         uv.y < uCropY || uv.y > uCropY + uCropH) {
       return vec2(-1.0);
     }
-    uv = (uv - vec2(uCropX, uCropY)) / vec2(uCropW, uCropH);
   }
   return clamp(uv, 0.0, 1.0);
 }
@@ -80,6 +88,36 @@ vec3 applySliders(vec3 c) {
   c.r += tintShift * 0.5;
   c.g += tintShift * 0.5;
   c.b -= tintShift;
+
+  // Tone-region adjustments (Lightroom-style).
+  float lum = dot(c, vec3(0.299, 0.587, 0.114));
+  float shadowsMask = 1.0 - smoothstep(0.0, 0.35, lum);
+  float highlightsMask = smoothstep(0.65, 1.0, lum);
+
+  // Shadows slider: positive lifts shadows, negative darkens
+  if (uShadows != 0.0) {
+    float sh = uShadows / 100.0 * 0.5;
+    c += sh * shadowsMask;
+  }
+  // Highlights slider: positive brightens, negative darkens
+  if (uHighlights != 0.0) {
+    float hi = uHighlights / 100.0 * 0.5;
+    c += hi * highlightsMask;
+  }
+  // Whites: shift white point globally toward c.r=1 (positive) or c.r=0 (negative)
+  if (uWhites != 0.0) {
+    float w = uWhites / 100.0 * 0.3;
+    // Apply proportional to how bright the pixel is
+    float wMask = smoothstep(0.4, 1.0, lum);
+    c += w * wMask;
+  }
+  // Blacks: shift black point toward 0 (negative) or lift (positive)
+  if (uBlacks != 0.0) {
+    float b = uBlacks / 100.0 * 0.3;
+    float bMask = 1.0 - smoothstep(0.0, 0.6, lum);
+    c += b * bMask;
+  }
+
   return clamp(c, 0.0, 1.0);
 }
 
@@ -109,6 +147,20 @@ void main() {
   vec3 lutResult = texture(uLut, clamped).rgb;
   // Mix sliders+LUT result with the slider-only result based on intensity.
   vec3 outColor = mix(adjusted, lutResult, uLutIntensity);
+
+  // Vignette: darken at edges. Compute distance from center of vUv (assumes
+  // canvas is centered on source UV). Strength 0..100 maps to 0..0.9 darkening.
+  if (uVignette > 0.0) {
+    // Aspect-correct distance: account for canvas aspect so the vignette
+    // is circular, not elliptical. Use a 'shorter axis' reference.
+    vec2 d = vUv - 0.5;
+    float r = length(d);
+    // At strength 100, factor at corner r=0.707 is ~0.30 (darken to 30%).
+    // Smooth ramp from 0 at center to full at corner.
+    float vig = 1.0 - smoothstep(0.2, 0.8, r) * (uVignette / 100.0) * 0.85;
+    outColor *= vig;
+  }
+
   fragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }
 `;
@@ -422,130 +474,141 @@ void main() {
   fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }
 `;
-let curveTexR = null;
-let curveTexG = null;
-let curveTexB = null;
-let curveFbo = null;
-let curveTex = null;
-let curveIsIdentity = true;
-let hslProg = null;
-let hslFbo = null;
-let hslTex = null;
-let hslIsFlat = true;
-let calibProg = null;
-let calibIsFlat = true;
-const _identityLut = new Float32Array(256);
-for (let i = 0; i < 256; i++) _identityLut[i] = i / 255;
-function _buildLut(ch) {
-  if (!ch || ch.length === 0) return new Float32Array(_identityLut);
-  const pts = [...ch].sort((a, b) => a[0] - b[0]);
-  const x0 = pts[0][0], x1 = pts[pts.length - 1][0];
-  const lut = new Float32Array(256);
-  for (let x = 0; x < 256; x++) {
-    if (x <= x0) {
-      lut[x] = pts[0][1] / 255;
-      continue;
-    }
-    if (x >= x1) {
-      lut[x] = pts[pts.length - 1][1] / 255;
-      continue;
-    }
-    let lo = 0, hi = pts.length - 1;
-    while (hi - lo > 1) {
-      const mid = lo + hi >> 1;
-      if (pts[mid][0] <= x) lo = mid;
-      else hi = mid;
-    }
-    const xLo = pts[lo][0], yLo = pts[lo][1];
-    const xHi = pts[hi][0], yHi = pts[hi][1];
-    const t = xHi === xLo ? 0 : (x - xLo) / (xHi - xLo);
-    lut[x] = (yLo + t * (yHi - yLo)) / 255;
-  }
-  return lut;
-}
-function _isIdentity(ch) {
-  if (!ch || ch.length === 0) return true;
-  if (ch.length === 2 && ch[0][0] === 0 && ch[0][1] === 0 && ch[1][0] === 255 && ch[1][1] === 255) return true;
-  return false;
-}
-function _uploadCurveTex(tex, lut) {
-  if (!gl) return;
-  const rgba = new Uint8Array(256 * 4);
-  for (let i = 0; i < 256; i++) {
-    const v = Math.max(0, Math.min(255, Math.round(lut[i] * 255)));
-    rgba[i * 4] = v;
-    rgba[i * 4 + 1] = v;
-    rgba[i * 4 + 2] = v;
-    rgba[i * 4 + 3] = 255;
-  }
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-}
-function _float32Eq(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 1e-6) return false;
-  return true;
-}
-let _lastCurveR = null;
-let _lastCurveG = null;
-let _lastCurveB = null;
-function isEffectsFlat() {
-  if (lastState.hsl) {
-    for (const key of Object.keys(lastState.hsl)) {
-      const r = lastState.hsl[key];
-      if (Math.abs(r.h) > 1e-4 || Math.abs(r.s) > 1e-4 || Math.abs(r.l) > 1e-4) return false;
-    }
-  }
-  const cg = lastState.colorGrading;
-  if (cg && ((cg.shadows_intensity ?? 0) !== 0 || (cg.midtones_intensity ?? 0) !== 0 || (cg.highlights_intensity ?? 0) !== 0 || (cg.global_intensity ?? 0) !== 0)) return false;
-  const st = lastState.splitToning;
-  if (st && (Math.abs(st.shadows_hue) > 1e-4 || Math.abs(st.shadows_saturation) > 1e-4 || Math.abs(st.highlights_hue) > 1e-4 || Math.abs(st.highlights_saturation) > 1e-4 || Math.abs(st.balance) > 1e-4)) return false;
-  const gr = lastState.grain;
-  if (gr && Math.abs(gr.amount) > 1e-4) return false;
-  if (lastState.dehaze && Math.abs(lastState.dehaze) > 1e-4) return false;
-  return true;
-}
-function setHsl(hslData, colorGrading) {
-  if (!ready || !gl) return;
-}
-function setCurves(curves) {
-  if (!ready || !gl) return;
-  if (!curveTexR) {
-    curveTexR = gl.createTexture();
-  }
-  if (!curveTexG) {
-    curveTexG = gl.createTexture();
-  }
-  if (!curveTexB) {
-    curveTexB = gl.createTexture();
-  }
-  const chR = curves?.r, chG = curves?.g, chB = curves?.b;
-  curveIsIdentity = _isIdentity(chR) && _isIdentity(chG) && _isIdentity(chB);
-  const lutR = _buildLut(curveIsIdentity ? void 0 : chR);
-  const lutG = _buildLut(curveIsIdentity ? void 0 : chG);
-  const lutB = _buildLut(curveIsIdentity ? void 0 : chB);
-  if (!_lastCurveR || !_float32Eq(lutR, _lastCurveR)) {
-    _uploadCurveTex(curveTexR, lutR);
-    _lastCurveR = lutR;
-  }
-  if (!_lastCurveG || !_float32Eq(lutG, _lastCurveG)) {
-    _uploadCurveTex(curveTexG, lutG);
-    _lastCurveG = lutG;
-  }
-  if (!_lastCurveB || !_float32Eq(lutB, _lastCurveB)) {
-    _uploadCurveTex(curveTexB, lutB);
-    _lastCurveB = lutB;
-  }
-}
 function createWebGLPipeline() {
-  let gl2 = null;
+  let curveTexR = null;
+  let curveTexG = null;
+  let curveTexB = null;
+  let curveFbo = null;
+  let curveTex = null;
+  let curveIsIdentity = true;
+  let hslProg = null;
+  let hslFbo = null;
+  let hslTex = null;
+  let hslIsFlat = true;
+  let calibProg = null;
+  let calibIsFlat = true;
+  const _identityLut = new Float32Array(256);
+  for (let i = 0; i < 256; i++) _identityLut[i] = i / 255;
+  function _buildLut(ch) {
+    if (!ch || ch.length === 0) return new Float32Array(_identityLut);
+    const pts = [...ch].sort((a, b) => a[0] - b[0]);
+    const x0 = pts[0][0], x1 = pts[pts.length - 1][0];
+    const lut = new Float32Array(256);
+    for (let x = 0; x < 256; x++) {
+      if (x <= x0) {
+        lut[x] = pts[0][1] / 255;
+        continue;
+      }
+      if (x >= x1) {
+        lut[x] = pts[pts.length - 1][1] / 255;
+        continue;
+      }
+      let lo = 0, hi = pts.length - 1;
+      while (hi - lo > 1) {
+        const mid = lo + hi >> 1;
+        if (pts[mid][0] <= x) lo = mid;
+        else hi = mid;
+      }
+      const xLo = pts[lo][0], yLo = pts[lo][1];
+      const xHi = pts[hi][0], yHi = pts[hi][1];
+      const t = xHi === xLo ? 0 : (x - xLo) / (xHi - xLo);
+      lut[x] = (yLo + t * (yHi - yLo)) / 255;
+    }
+    return lut;
+  }
+  function _isIdentity(ch) {
+    if (!ch || ch.length === 0) return true;
+    if (ch.length === 2 && ch[0][0] === 0 && ch[0][1] === 0 && ch[1][0] === 255 && ch[1][1] === 255) return true;
+    return false;
+  }
+  function _uploadCurveTex(tex, lut) {
+    if (!gl) return;
+    const rgba = new Uint8Array(256 * 4);
+    for (let i = 0; i < 256; i++) {
+      const v = Math.max(0, Math.min(255, Math.round(lut[i] * 255)));
+      rgba[i * 4] = v;
+      rgba[i * 4 + 1] = v;
+      rgba[i * 4 + 2] = v;
+      rgba[i * 4 + 3] = 255;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+  function _float32Eq(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 1e-6) return false;
+    return true;
+  }
+  let _lastCurveR = null;
+  let _lastCurveG = null;
+  let _lastCurveB = null;
+  function isEffectsFlat() {
+    if (lastState.hsl) {
+      for (const key of Object.keys(lastState.hsl)) {
+        const r = lastState.hsl[key];
+        if (Math.abs(r.h) > 1e-4 || Math.abs(r.s) > 1e-4 || Math.abs(r.l) > 1e-4) return false;
+      }
+    }
+    const cg = lastState.colorGrading;
+    if (cg && ((cg.shadows_intensity ?? 0) !== 0 || (cg.midtones_intensity ?? 0) !== 0 || (cg.highlights_intensity ?? 0) !== 0 || (cg.global_intensity ?? 0) !== 0)) return false;
+    const st = lastState.splitToning;
+    if (st && (Math.abs(st.shadows_hue) > 1e-4 || Math.abs(st.shadows_saturation) > 1e-4 || Math.abs(st.highlights_hue) > 1e-4 || Math.abs(st.highlights_saturation) > 1e-4 || Math.abs(st.balance) > 1e-4)) return false;
+    const gr = lastState.grain;
+    if (gr && Math.abs(gr.amount) > 1e-4) return false;
+    if (lastState.dehaze && Math.abs(lastState.dehaze) > 1e-4) return false;
+    return true;
+  }
+  function setHsl(hslData, colorGrading) {
+    if (!ready || !gl) return;
+    lastState.hsl = hslData;
+    if (colorGrading) lastState.colorGrading = colorGrading;
+    console.log("[WGL] setHsl called: cg=", JSON.stringify(colorGrading));
+  }
+  function setSplitToning(st) {
+    if (!ready || !gl) return;
+    lastState.splitToning = st;
+  }
+  function setGrain(gr) {
+    if (!ready || !gl) return;
+    lastState.grain = gr;
+  }
+  function setCurves(curves) {
+    if (!ready || !gl) return;
+    if (!curveTexR) {
+      curveTexR = gl.createTexture();
+    }
+    if (!curveTexG) {
+      curveTexG = gl.createTexture();
+    }
+    if (!curveTexB) {
+      curveTexB = gl.createTexture();
+    }
+    const chR = curves?.r, chG = curves?.g, chB = curves?.b;
+    curveIsIdentity = _isIdentity(chR) && _isIdentity(chG) && _isIdentity(chB);
+    const lutR = _buildLut(curveIsIdentity ? void 0 : chR);
+    const lutG = _buildLut(curveIsIdentity ? void 0 : chG);
+    const lutB = _buildLut(curveIsIdentity ? void 0 : chB);
+    if (!_lastCurveR || !_float32Eq(lutR, _lastCurveR)) {
+      _uploadCurveTex(curveTexR, lutR);
+      _lastCurveR = lutR;
+    }
+    if (!_lastCurveG || !_float32Eq(lutG, _lastCurveG)) {
+      _uploadCurveTex(curveTexG, lutG);
+      _lastCurveG = lutG;
+    }
+    if (!_lastCurveB || !_float32Eq(lutB, _lastCurveB)) {
+      _uploadCurveTex(curveTexB, lutB);
+      _lastCurveB = lutB;
+    }
+  }
+  let gl = null;
   let canvasRef = null;
-  let ready2 = false;
+  let ready = false;
   let slidersLutProg = null;
   let blurHProg = null;
   let blurVProg = null;
@@ -560,7 +623,7 @@ function createWebGLPipeline() {
   let sharpenFboB = null;
   let sourceW = 0;
   let sourceH = 0;
-  const lastState2 = {
+  const lastState = {
     exposure: 0,
     contrast: 0,
     brightness: 0,
@@ -570,6 +633,11 @@ function createWebGLPipeline() {
     sharpen: 0,
     lut_id: 0,
     lut_intensity: 0,
+    vignette: 0,
+    highlights: 0,
+    shadows: 0,
+    whites: 0,
+    blacks: 0,
     straighten: 0,
     cropX: 0,
     cropY: 0,
@@ -587,40 +655,40 @@ function createWebGLPipeline() {
     cg: void 0
   };
   function compileShader(type, source) {
-    const shader = gl2.createShader(type);
+    const shader = gl.createShader(type);
     if (!shader) throw new Error("createShader failed");
-    gl2.shaderSource(shader, source);
-    gl2.compileShader(shader);
-    if (!gl2.getShaderParameter(shader, gl2.COMPILE_STATUS)) {
-      const log = gl2.getShaderInfoLog(shader);
-      gl2.deleteShader(shader);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(shader);
+      gl.deleteShader(shader);
       throw new Error("shader compile failed: " + log);
     }
     return shader;
   }
   function createProgram(vert, frag) {
-    const v = compileShader(gl2.VERTEX_SHADER, vert);
-    const f = compileShader(gl2.FRAGMENT_SHADER, frag);
-    const prog = gl2.createProgram();
+    const v = compileShader(gl.VERTEX_SHADER, vert);
+    const f = compileShader(gl.FRAGMENT_SHADER, frag);
+    const prog = gl.createProgram();
     if (!prog) throw new Error("createProgram failed");
-    gl2.attachShader(prog, v);
-    gl2.attachShader(prog, f);
-    gl2.linkProgram(prog);
-    if (!gl2.getProgramParameter(prog, gl2.LINK_STATUS)) {
-      const log = gl2.getProgramInfoLog(prog);
-      gl2.deleteProgram(prog);
+    gl.attachShader(prog, v);
+    gl.attachShader(prog, f);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      const log = gl.getProgramInfoLog(prog);
+      gl.deleteProgram(prog);
       throw new Error("program link failed: " + log);
     }
-    gl2.detachShader(prog, v);
-    gl2.detachShader(prog, f);
-    gl2.deleteShader(v);
-    gl2.deleteShader(f);
+    gl.detachShader(prog, v);
+    gl.detachShader(prog, f);
+    gl.deleteShader(v);
+    gl.deleteShader(f);
     return prog;
   }
   function setupQuad() {
-    const vao = gl2.createVertexArray();
+    const vao = gl.createVertexArray();
     if (!vao) throw new Error("createVertexArray failed");
-    gl2.bindVertexArray(vao);
+    gl.bindVertexArray(vao);
     quadVao = vao;
     const verts = new Float32Array([
       // x, y, u, v
@@ -649,39 +717,39 @@ function createWebGLPipeline() {
       1,
       1
     ]);
-    const vbo = gl2.createBuffer();
-    gl2.bindBuffer(gl2.ARRAY_BUFFER, vbo);
-    gl2.bufferData(gl2.ARRAY_BUFFER, verts, gl2.STATIC_DRAW);
-    gl2.enableVertexAttribArray(0);
-    gl2.vertexAttribPointer(0, 2, gl2.FLOAT, false, 16, 0);
-    gl2.enableVertexAttribArray(1);
-    gl2.vertexAttribPointer(1, 2, gl2.FLOAT, false, 16, 8);
-    gl2.bindVertexArray(null);
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
+    gl.bindVertexArray(null);
   }
   function createColorTex(w, h, internalFmt, fmt, type) {
-    const tex = gl2.createTexture();
+    const tex = gl.createTexture();
     if (!tex) throw new Error("createTexture failed");
-    gl2.bindTexture(gl2.TEXTURE_2D, tex);
-    gl2.texImage2D(gl2.TEXTURE_2D, 0, internalFmt, w, h, 0, fmt, type, null);
-    gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MIN_FILTER, gl2.LINEAR);
-    gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MAG_FILTER, gl2.LINEAR);
-    gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_S, gl2.CLAMP_TO_EDGE);
-    gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_T, gl2.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFmt, w, h, 0, fmt, type, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return tex;
   }
   function attachFbo(tex) {
-    const fbo = gl2.createFramebuffer();
+    const fbo = gl.createFramebuffer();
     if (!fbo) throw new Error("createFramebuffer failed");
-    gl2.bindFramebuffer(gl2.FRAMEBUFFER, fbo);
-    gl2.framebufferTexture2D(
-      gl2.FRAMEBUFFER,
-      gl2.COLOR_ATTACHMENT0,
-      gl2.TEXTURE_2D,
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
       tex,
       0
     );
-    const status = gl2.checkFramebufferStatus(gl2.FRAMEBUFFER);
-    if (status !== gl2.FRAMEBUFFER_COMPLETE) {
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
       throw new Error("framebuffer incomplete: 0x" + status.toString(16));
     }
     return fbo;
@@ -689,15 +757,15 @@ function createWebGLPipeline() {
   function init(canvas) {
     canvasRef = canvas;
     try {
-      gl2 = canvas.getContext("webgl2", {
+      gl = canvas.getContext("webgl2", {
         alpha: false,
         antialias: false,
         depth: false,
         stencil: false,
-        preserveDrawingBuffer: false,
+        preserveDrawingBuffer: true,
         premultipliedAlpha: false
       });
-      if (!gl2) return false;
+      if (!gl) return false;
       slidersLutProg = createProgram(VERT_SRC, SLIDERS_LUT_FRAG);
       blurHProg = createProgram(VERT_SRC, BLUR_H_FRAG);
       blurVProg = createProgram(VERT_SRC, BLUR_V_FRAG);
@@ -706,39 +774,39 @@ function createWebGLPipeline() {
       hslProg = createProgram(VERT_SRC, HSL_FRAG);
       calibProg = createProgram(VERT_SRC, CALIBRATION_FRAG);
       setupQuad();
-      ready2 = true;
+      ready = true;
       return true;
     } catch (e) {
       console.warn("WebGL pipeline init failed:", e);
-      ready2 = false;
+      ready = false;
       return false;
     }
   }
   function setSource(image) {
-    if (!ready2 || !gl2) return;
+    if (!ready || !gl) return;
     sourceW = image.naturalWidth || image.width;
     sourceH = image.naturalHeight || image.height;
-    if (sourceTex) gl2.deleteTexture(sourceTex);
-    sourceTex = gl2.createTexture();
-    gl2.bindTexture(gl2.TEXTURE_2D, sourceTex);
-    gl2.pixelStorei(gl2.UNPACK_FLIP_Y_WEBGL, true);
-    gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA, gl2.RGBA, gl2.UNSIGNED_BYTE, image);
-    gl2.pixelStorei(gl2.UNPACK_FLIP_Y_WEBGL, false);
-    gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MIN_FILTER, gl2.LINEAR);
-    gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MAG_FILTER, gl2.LINEAR);
-    gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_S, gl2.CLAMP_TO_EDGE);
-    gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_T, gl2.CLAMP_TO_EDGE);
-    if (sharpenTexA) gl2.deleteTexture(sharpenTexA);
-    if (sharpenTexB) gl2.deleteTexture(sharpenTexB);
-    if (sharpenFboA) gl2.deleteFramebuffer(sharpenFboA);
-    if (sharpenFboB) gl2.deleteFramebuffer(sharpenFboB);
-    sharpenTexA = createColorTex(sourceW, sourceH, gl2.RGBA, gl2.RGBA, gl2.UNSIGNED_BYTE);
-    sharpenTexB = createColorTex(sourceW, sourceH, gl2.RGBA, gl2.RGBA, gl2.UNSIGNED_BYTE);
+    if (sourceTex) gl.deleteTexture(sourceTex);
+    sourceTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, sourceTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    if (sharpenTexA) gl.deleteTexture(sharpenTexA);
+    if (sharpenTexB) gl.deleteTexture(sharpenTexB);
+    if (sharpenFboA) gl.deleteFramebuffer(sharpenFboA);
+    if (sharpenFboB) gl.deleteFramebuffer(sharpenFboB);
+    sharpenTexA = createColorTex(sourceW, sourceH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
+    sharpenTexB = createColorTex(sourceW, sourceH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
     sharpenFboA = attachFbo(sharpenTexA);
     sharpenFboB = attachFbo(sharpenTexB);
   }
   function setLut(lut) {
-    if (!ready2 || !gl2) return;
+    if (!ready || !gl) return;
     const { data, size } = lut;
     const cellCount = size * size * size;
     const rgba = new Uint8Array(cellCount * 4);
@@ -757,264 +825,275 @@ function createWebGLPipeline() {
         rgba[i * 4 + 3] = 255;
       }
     }
-    if (lutTex) gl2.deleteTexture(lutTex);
-    lutTex = gl2.createTexture();
-    gl2.activeTexture(gl2.TEXTURE1);
-    gl2.bindTexture(gl2.TEXTURE_3D, lutTex);
-    gl2.pixelStorei(gl2.UNPACK_ALIGNMENT, 1);
-    gl2.texImage3D(
-      gl2.TEXTURE_3D,
+    if (lutTex) gl.deleteTexture(lutTex);
+    lutTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_3D, lutTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage3D(
+      gl.TEXTURE_3D,
       0,
-      gl2.RGBA8,
+      gl.RGBA8,
       size,
       size,
       size,
       0,
-      gl2.RGBA,
-      gl2.UNSIGNED_BYTE,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
       rgba
     );
-    gl2.texParameteri(gl2.TEXTURE_3D, gl2.TEXTURE_MIN_FILTER, gl2.LINEAR);
-    gl2.texParameteri(gl2.TEXTURE_3D, gl2.TEXTURE_MAG_FILTER, gl2.LINEAR);
-    gl2.texParameteri(gl2.TEXTURE_3D, gl2.TEXTURE_WRAP_S, gl2.CLAMP_TO_EDGE);
-    gl2.texParameteri(gl2.TEXTURE_3D, gl2.TEXTURE_WRAP_T, gl2.CLAMP_TO_EDGE);
-    gl2.texParameteri(gl2.TEXTURE_3D, gl2.TEXTURE_WRAP_R, gl2.CLAMP_TO_EDGE);
-    gl2.activeTexture(gl2.TEXTURE0);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+    gl.activeTexture(gl.TEXTURE0);
   }
   function updateState(state) {
-    Object.assign(lastState2, state);
+    for (const k in state) {
+      const v = state[k];
+      if (v !== void 0) lastState[k] = v;
+    }
   }
-  function runPass(prog, uniforms, targetFbo, width, height) {
-    if (!gl2) return;
-    gl2.useProgram(prog);
-    gl2.bindVertexArray(quadVao);
-    gl2.viewport(0, 0, width, height);
-    if (targetFbo) gl2.bindFramebuffer(gl2.FRAMEBUFFER, targetFbo);
-    else gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+  function runPass(prog, uniforms, targetFbo, width, height, _label) {
+    if (!gl) return;
+    gl.useProgram(prog);
+    gl.bindVertexArray(quadVao);
+    gl.viewport(0, 0, width, height);
+    if (targetFbo) gl.bindFramebuffer(gl.FRAMEBUFFER, targetFbo);
+    else gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     uniforms();
-    gl2.drawArrays(gl2.TRIANGLES, 0, 6);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    const _err = gl.getError();
   }
   function render() {
-    if (!ready2 || !gl2 || !canvasRef) return;
-    const ctx = gl2;
+    if (!ready || !gl || !canvasRef) return;
+    const ctx = gl;
     const w = canvasRef.width;
     const h = canvasRef.height;
     let outputTex = sourceTex;
-    if (lastState2.sharpen > 0 && sharpenTexA && sharpenTexB && sharpenFboA && sharpenFboB) {
-      const amount = Math.max(0, Math.min(1, lastState2.sharpen / 100));
-      gl2.activeTexture(gl2.TEXTURE0);
-      gl2.bindTexture(gl2.TEXTURE_2D, sourceTex);
+    if (lastState.sharpen > 0 && sharpenTexA && sharpenTexB && sharpenFboA && sharpenFboB) {
+      const amount = Math.max(0, Math.min(1, lastState.sharpen / 100));
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, sourceTex);
       runPass(blurHProg, () => {
-        gl2.uniform1i(gl2.getUniformLocation(blurHProg, "uSource"), 0);
-        gl2.uniform2f(
-          gl2.getUniformLocation(blurHProg, "uTexelSize"),
+        gl.uniform1i(gl.getUniformLocation(blurHProg, "uSource"), 0);
+        gl.uniform2f(
+          gl.getUniformLocation(blurHProg, "uTexelSize"),
           1 / sourceW,
           1 / sourceH
         );
       }, sharpenFboA, sourceW, sourceH);
-      gl2.bindTexture(gl2.TEXTURE_2D, sharpenTexA);
+      gl.bindTexture(gl.TEXTURE_2D, sharpenTexA);
       runPass(blurVProg, () => {
-        gl2.uniform1i(gl2.getUniformLocation(blurVProg, "uSource"), 0);
-        gl2.uniform2f(
-          gl2.getUniformLocation(blurVProg, "uTexelSize"),
+        gl.uniform1i(gl.getUniformLocation(blurVProg, "uSource"), 0);
+        gl.uniform2f(
+          gl.getUniformLocation(blurVProg, "uTexelSize"),
           1 / sourceW,
           1 / sourceH
         );
       }, sharpenFboB, sourceW, sourceH);
-      gl2.activeTexture(gl2.TEXTURE0);
-      gl2.bindTexture(gl2.TEXTURE_2D, sourceTex);
-      gl2.activeTexture(gl2.TEXTURE2);
-      gl2.bindTexture(gl2.TEXTURE_2D, sharpenTexB);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, sourceTex);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, sharpenTexB);
       runPass(unsharpProg, () => {
-        gl2.uniform1i(gl2.getUniformLocation(unsharpProg, "uSource"), 0);
-        gl2.uniform1i(gl2.getUniformLocation(unsharpProg, "uBlur"), 2);
-        gl2.uniform1f(gl2.getUniformLocation(unsharpProg, "uAmount"), amount);
+        gl.uniform1i(gl.getUniformLocation(unsharpProg, "uSource"), 0);
+        gl.uniform1i(gl.getUniformLocation(unsharpProg, "uBlur"), 2);
+        gl.uniform1f(gl.getUniformLocation(unsharpProg, "uAmount"), amount);
       }, sharpenFboA, sourceW, sourceH);
       outputTex = sharpenTexA;
-      gl2.activeTexture(gl2.TEXTURE0);
-      gl2.bindTexture(gl2.TEXTURE_2D, outputTex);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, outputTex);
     } else {
-      gl2.activeTexture(gl2.TEXTURE0);
-      gl2.bindTexture(gl2.TEXTURE_2D, sourceTex);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, sourceTex);
     }
-    gl2.activeTexture(gl2.TEXTURE1);
-    if (lutTex) gl2.bindTexture(gl2.TEXTURE_3D, lutTex);
-    gl2.activeTexture(gl2.TEXTURE0);
+    gl.activeTexture(gl.TEXTURE1);
+    if (lutTex) gl.bindTexture(gl.TEXTURE_3D, lutTex);
+    gl.activeTexture(gl.TEXTURE0);
     if (!curveFbo || !curveTex || curveTex.width !== w || curveTex.height !== h) {
-      if (curveTex) gl2.deleteTexture(curveTex);
-      if (curveFbo) gl2.deleteFramebuffer(curveFbo);
-      curveTex = gl2.createTexture();
-      gl2.bindTexture(gl2.TEXTURE_2D, curveTex);
-      gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA8, w, h, 0, gl2.RGBA, gl2.UNSIGNED_BYTE, null);
-      gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MIN_FILTER, gl2.LINEAR);
-      gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MAG_FILTER, gl2.LINEAR);
-      gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_S, gl2.CLAMP_TO_EDGE);
-      gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_T, gl2.CLAMP_TO_EDGE);
-      curveFbo = gl2.createFramebuffer();
-      gl2.bindFramebuffer(gl2.FRAMEBUFFER, curveFbo);
-      gl2.framebufferTexture2D(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.TEXTURE_2D, curveTex, 0);
-      gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+      if (curveTex) gl.deleteTexture(curveTex);
+      if (curveFbo) gl.deleteFramebuffer(curveFbo);
+      curveTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, curveTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      curveFbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, curveFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, curveTex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
-    gl2.bindFramebuffer(gl2.FRAMEBUFFER, curveFbo);
-    gl2.viewport(0, 0, w, h);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, outputTex);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, curveFbo);
+    gl.viewport(0, 0, w, h);
     runPass(slidersLutProg, () => {
       const p = slidersLutProg;
-      gl2.uniform1i(gl2.getUniformLocation(p, "uSource"), 0);
-      gl2.uniform1i(gl2.getUniformLocation(p, "uLut"), 1);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uLutSize"), 32);
-      gl2.uniform1f(
-        gl2.getUniformLocation(p, "uLutIntensity"),
-        Math.max(0, Math.min(1, lastState2.lut_intensity / 100))
+      gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
+      gl.uniform1i(gl.getUniformLocation(p, "uLut"), 1);
+      gl.uniform1f(gl.getUniformLocation(p, "uLutSize"), 32);
+      gl.uniform1f(
+        gl.getUniformLocation(p, "uLutIntensity"),
+        lutTex ? Math.max(0, Math.min(1, lastState.lut_intensity / 100)) : 0
       );
-      gl2.uniform1f(gl2.getUniformLocation(p, "uExposure"), lastState2.exposure);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uContrast"), lastState2.contrast);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uBrightness"), lastState2.brightness);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uSaturation"), lastState2.saturation);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uTemp"), lastState2.temp);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uTint"), lastState2.tint);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uStraightenAngle"), lastState2.straighten || 0);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uCropX"), lastState2.cropX || 0);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uCropY"), lastState2.cropY || 0);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uCropW"), lastState2.cropW || 0);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uCropH"), lastState2.cropH || 0);
-      const lc = lastState2.lens_corrections || {};
-      gl2.uniform1f(gl2.getUniformLocation(p, "uCAStrength"), lc.chromatic_aberration || 0);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uCAX"), lc.chromatic_aberration_x || 0);
-      gl2.uniform1f(gl2.getUniformLocation(p, "uCAY"), lc.chromatic_aberration_y || 0);
-    }, null, w, h);
-    gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
-    gl2.viewport(0, 0, w, h);
-    if (!curveIsIdentity && curveProg && curveTexR && curveTexG && curveTexB) {
-      gl2.activeTexture(gl2.TEXTURE0);
-      gl2.bindTexture(gl2.TEXTURE_2D, curveTex);
-      gl2.activeTexture(gl2.TEXTURE1);
-      gl2.bindTexture(gl2.TEXTURE_2D, curveTexR);
-      gl2.activeTexture(gl2.TEXTURE2);
-      gl2.bindTexture(gl2.TEXTURE_2D, curveTexG);
-      gl2.activeTexture(gl2.TEXTURE3);
-      gl2.bindTexture(gl2.TEXTURE_2D, curveTexB);
+      gl.uniform1f(gl.getUniformLocation(p, "uExposure"), lastState.exposure);
+      gl.uniform1f(gl.getUniformLocation(p, "uContrast"), lastState.contrast);
+      gl.uniform1f(gl.getUniformLocation(p, "uBrightness"), lastState.brightness);
+      gl.uniform1f(gl.getUniformLocation(p, "uSaturation"), lastState.saturation);
+      gl.uniform1f(gl.getUniformLocation(p, "uTemp"), lastState.temp);
+      gl.uniform1f(gl.getUniformLocation(p, "uTint"), lastState.tint);
+      gl.uniform1f(gl.getUniformLocation(p, "uStraightenAngle"), lastState.straighten || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uCropX"), lastState.cropX || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uCropY"), lastState.cropY || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uCropW"), lastState.cropW || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uCropH"), lastState.cropH || 0);
+      const lc = lastState.lens_corrections || {};
+      gl.uniform1f(gl.getUniformLocation(p, "uCAStrength"), lc.chromatic_aberration || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uCAX"), lc.chromatic_aberration_x || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uCAY"), lc.chromatic_aberration_y || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uVignette"), lastState.vignette || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uHighlights"), lastState.highlights || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uShadows"), lastState.shadows || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uWhites"), lastState.whites || 0);
+      gl.uniform1f(gl.getUniformLocation(p, "uBlacks"), lastState.blacks || 0);
+    }, curveFbo, w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, w, h);
+    if (curveProg && curveTexR && curveTexG && curveTexB) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, curveTex);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, curveTexR);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, curveTexG);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, curveTexB);
       runPass(curveProg, () => {
         const p = curveProg;
-        gl2.uniform1i(gl2.getUniformLocation(p, "uSource"), 0);
-        gl2.uniform1i(gl2.getUniformLocation(p, "uCurveR"), 1);
-        gl2.uniform1i(gl2.getUniformLocation(p, "uCurveG"), 2);
-        gl2.uniform1i(gl2.getUniformLocation(p, "uCurveB"), 3);
-        gl2.uniform1i(gl2.getUniformLocation(p, "uHasCurve"), 1);
+        gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
+        gl.uniform1i(gl.getUniformLocation(p, "uCurveR"), 1);
+        gl.uniform1i(gl.getUniformLocation(p, "uCurveG"), 2);
+        gl.uniform1i(gl.getUniformLocation(p, "uCurveB"), 3);
+        gl.uniform1i(gl.getUniformLocation(p, "uHasCurve"), curveIsIdentity ? 0 : 1);
       }, null, w, h);
     }
     if (!isEffectsFlat() && hslProg) {
       if (!hslFbo || !hslTex || hslTex.width !== w || hslTex.height !== h) {
-        if (hslTex) gl2.deleteTexture(hslTex);
-        if (hslFbo) gl2.deleteFramebuffer(hslFbo);
-        hslTex = gl2.createTexture();
-        gl2.bindTexture(gl2.TEXTURE_2D, hslTex);
-        gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA8, w, h, 0, gl2.RGBA, gl2.UNSIGNED_BYTE, null);
-        gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MIN_FILTER, gl2.LINEAR);
-        gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_MAG_FILTER, gl2.LINEAR);
-        gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_S, gl2.CLAMP_TO_EDGE);
-        gl2.texParameteri(gl2.TEXTURE_2D, gl2.TEXTURE_WRAP_T, gl2.CLAMP_TO_EDGE);
-        hslFbo = gl2.createFramebuffer();
-        gl2.bindFramebuffer(gl2.FRAMEBUFFER, hslFbo);
-        gl2.framebufferTexture2D(gl2.FRAMEBUFFER, gl2.COLOR_ATTACHMENT0, gl2.TEXTURE_2D, hslTex, 0);
-        gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
+        if (hslTex) gl.deleteTexture(hslTex);
+        if (hslFbo) gl.deleteFramebuffer(hslFbo);
+        hslTex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, hslTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        hslFbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, hslFbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, hslTex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       }
-      gl2.activeTexture(gl2.TEXTURE0);
-      gl2.bindTexture(gl2.TEXTURE_2D, curveTex || curveFbo ? curveTex : sourceTex);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, curveTex || curveFbo ? curveTex : sourceTex);
       runPass(hslProg, () => {
         const p = hslProg;
-        gl2.uniform1i(gl2.getUniformLocation(p, "uSource"), 0);
-        const hsl = lastState2.hsl || {};
-        const cg = lastState2.colorGrading;
+        gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
+        const hsl = lastState.hsl || {};
+        const cg = lastState.colorGrading;
         const RANGES = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
         RANGES.forEach((name, i) => {
           const r = hsl["hsl_" + name.toLowerCase()] || { h: 0, s: 0, l: 0 };
-          gl2.uniform1f(gl2.getUniformLocation(p, `uHsl${name}_h`), r.h / 100);
-          gl2.uniform1f(gl2.getUniformLocation(p, `uHsl${name}_s`), r.s / 100);
-          gl2.uniform1f(gl2.getUniformLocation(p, `uHsl${name}_l`), r.l / 100);
+          gl.uniform1f(gl.getUniformLocation(p, `uHsl${name}_h`), r.h / 100);
+          gl.uniform1f(gl.getUniformLocation(p, `uHsl${name}_s`), r.s / 100);
+          gl.uniform1f(gl.getUniformLocation(p, `uHsl${name}_l`), r.l / 100);
         });
-        gl2.uniform1i(gl2.getUniformLocation(p, "uHslActive"), isEffectsFlat() ? 0 : 1);
+        gl.uniform1i(gl.getUniformLocation(p, "uHslActive"), isEffectsFlat() ? 0 : 1);
         if (cg) {
-          gl2.uniform3fv(gl2.getUniformLocation(p, "uCgShadowsColour"), [(cg.shadows_colour[0] ?? 0) / 255, (cg.shadows_colour[1] ?? 0) / 255, (cg.shadows_colour[2] ?? 0) / 255]);
-          gl2.uniform3fv(gl2.getUniformLocation(p, "uCgMidtonesColour"), [(cg.midtones_colour[0] ?? 0) / 255, (cg.midtones_colour[1] ?? 0) / 255, (cg.midtones_colour[2] ?? 0) / 255]);
-          gl2.uniform3fv(gl2.getUniformLocation(p, "uCgHighlightsColour"), [(cg.highlights_colour[0] ?? 0) / 255, (cg.highlights_colour[1] ?? 0) / 255, (cg.highlights_colour[2] ?? 0) / 255]);
-          gl2.uniform3fv(gl2.getUniformLocation(p, "uCgGlobalColour"), [(cg.global_colour[0] ?? 0) / 255, (cg.global_colour[1] ?? 0) / 255, (cg.global_colour[2] ?? 0) / 255]);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uCgShadowsIntensity"), cg.shadows_intensity ?? 0);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uCgMidtonesIntensity"), cg.midtones_intensity ?? 0);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uCgHighlightsIntensity"), cg.highlights_intensity ?? 0);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uCgGlobalIntensity"), cg.global_intensity ?? 0);
-          gl2.uniform1i(gl2.getUniformLocation(p, "uCgMode"), cg.mode === "luminance" ? 1 : 0);
+          gl.uniform3fv(gl.getUniformLocation(p, "uCgShadowsColour"), [(cg.shadows_colour[0] ?? 0) / 255, (cg.shadows_colour[1] ?? 0) / 255, (cg.shadows_colour[2] ?? 0) / 255]);
+          gl.uniform3fv(gl.getUniformLocation(p, "uCgMidtonesColour"), [(cg.midtones_colour[0] ?? 0) / 255, (cg.midtones_colour[1] ?? 0) / 255, (cg.midtones_colour[2] ?? 0) / 255]);
+          gl.uniform3fv(gl.getUniformLocation(p, "uCgHighlightsColour"), [(cg.highlights_colour[0] ?? 0) / 255, (cg.highlights_colour[1] ?? 0) / 255, (cg.highlights_colour[2] ?? 0) / 255]);
+          gl.uniform3fv(gl.getUniformLocation(p, "uCgGlobalColour"), [(cg.global_colour[0] ?? 0) / 255, (cg.global_colour[1] ?? 0) / 255, (cg.global_colour[2] ?? 0) / 255]);
+          gl.uniform1f(gl.getUniformLocation(p, "uCgShadowsIntensity"), cg.shadows_intensity ?? 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCgMidtonesIntensity"), cg.midtones_intensity ?? 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCgHighlightsIntensity"), cg.highlights_intensity ?? 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCgGlobalIntensity"), cg.global_intensity ?? 0);
+          gl.uniform1i(gl.getUniformLocation(p, "uCgMode"), cg.mode === "luminance" ? 1 : 0);
         } else {
-          gl2.uniform3f(gl2.getUniformLocation(p, "uCgShadowsColour"), 0, 0, 0);
-          gl2.uniform3f(gl2.getUniformLocation(p, "uCgMidtonesColour"), 0, 0, 0);
-          gl2.uniform3f(gl2.getUniformLocation(p, "uCgHighlightsColour"), 0, 0, 0);
-          gl2.uniform3f(gl2.getUniformLocation(p, "uCgGlobalColour"), 0, 0, 0);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uCgShadowsIntensity"), 0);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uCgMidtonesIntensity"), 0);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uCgHighlightsIntensity"), 0);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uCgGlobalIntensity"), 0);
-          gl2.uniform1i(gl2.getUniformLocation(p, "uCgMode"), 0);
+          gl.uniform3f(gl.getUniformLocation(p, "uCgShadowsColour"), 0, 0, 0);
+          gl.uniform3f(gl.getUniformLocation(p, "uCgMidtonesColour"), 0, 0, 0);
+          gl.uniform3f(gl.getUniformLocation(p, "uCgHighlightsColour"), 0, 0, 0);
+          gl.uniform3f(gl.getUniformLocation(p, "uCgGlobalColour"), 0, 0, 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCgShadowsIntensity"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCgMidtonesIntensity"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCgHighlightsIntensity"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCgGlobalIntensity"), 0);
+          gl.uniform1i(gl.getUniformLocation(p, "uCgMode"), 0);
         }
-        const st = lastState2.splitToning || { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 };
-        gl2.uniform1f(gl2.getUniformLocation(p, "uStShadowsHue"), st.shadows_hue);
-        gl2.uniform1f(gl2.getUniformLocation(p, "uStShadowsSat"), st.shadows_saturation);
-        gl2.uniform1f(gl2.getUniformLocation(p, "uStHighlightsHue"), st.highlights_hue);
-        gl2.uniform1f(gl2.getUniformLocation(p, "uStHighlightsSat"), st.highlights_saturation);
-        gl2.uniform1f(gl2.getUniformLocation(p, "uStBalance"), st.balance);
-        const gr = lastState2.grain || { amount: 0, size: 25 };
-        gl2.uniform1f(gl2.getUniformLocation(p, "uGrainAmount"), gr.amount);
-        gl2.uniform1f(gl2.getUniformLocation(p, "uGrainSize"), gr.size);
-        gl2.uniform1f(gl2.getUniformLocation(p, "uDehaze"), lastState2.dehaze || 0);
-        gl2.uniform1f(gl2.getUniformLocation(p, "uTime"), performance.now() / 1e3);
+        const st = lastState.splitToning || { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 };
+        gl.uniform1f(gl.getUniformLocation(p, "uStShadowsHue"), st.shadows_hue);
+        gl.uniform1f(gl.getUniformLocation(p, "uStShadowsSat"), st.shadows_saturation);
+        gl.uniform1f(gl.getUniformLocation(p, "uStHighlightsHue"), st.highlights_hue);
+        gl.uniform1f(gl.getUniformLocation(p, "uStHighlightsSat"), st.highlights_saturation);
+        gl.uniform1f(gl.getUniformLocation(p, "uStBalance"), st.balance);
+        const gr = lastState.grain || { amount: 0, size: 25 };
+        gl.uniform1f(gl.getUniformLocation(p, "uGrainAmount"), gr.amount);
+        gl.uniform1f(gl.getUniformLocation(p, "uGrainSize"), gr.size);
+        gl.uniform1f(gl.getUniformLocation(p, "uDehaze"), lastState.dehaze || 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uTime"), performance.now() / 1e3);
       }, null, w, h);
     }
     {
-      const calib = lastState2.calibration || {};
+      const calib = lastState.calibration || {};
       const shadowTint = calib.shadow_tint || 0;
       const calSat = calib.saturation || 0;
       calibIsFlat = shadowTint === 0 && calSat === 0;
       if (!calibIsFlat && calibProg) {
-        gl2.activeTexture(gl2.TEXTURE0);
-        gl2.bindTexture(gl2.TEXTURE_2D, hslTex || curveTex || sourceTex);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, hslTex || curveTex || sourceTex);
         runPass(calibProg, () => {
           const p = calibProg;
-          gl2.uniform1i(gl2.getUniformLocation(p, "uSource"), 0);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uShadowTint"), shadowTint);
-          gl2.uniform1f(gl2.getUniformLocation(p, "uCalSat"), calSat);
+          gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uShadowTint"), shadowTint);
+          gl.uniform1f(gl.getUniformLocation(p, "uCalSat"), calSat);
         }, null, w, h);
       }
     }
-    gl2.bindVertexArray(null);
+    gl.bindVertexArray(null);
   }
   function destroy() {
-    if (!gl2) return;
-    if (quadVao) gl2.deleteVertexArray(quadVao);
-    if (sourceTex) gl2.deleteTexture(sourceTex);
-    if (lutTex) gl2.deleteTexture(lutTex);
-    if (sharpenTexA) gl2.deleteTexture(sharpenTexA);
-    if (sharpenTexB) gl2.deleteTexture(sharpenTexB);
-    if (sharpenFboA) gl2.deleteFramebuffer(sharpenFboA);
-    if (sharpenFboB) gl2.deleteFramebuffer(sharpenFboB);
-    if (curveTex) gl2.deleteTexture(curveTex);
-    if (curveFbo) gl2.deleteFramebuffer(curveFbo);
-    if (curveTexR) gl2.deleteTexture(curveTexR);
-    if (curveTexG) gl2.deleteTexture(curveTexG);
-    if (curveTexB) gl2.deleteTexture(curveTexB);
-    if (hslTex) gl2.deleteTexture(hslTex);
-    if (hslFbo) gl2.deleteFramebuffer(hslFbo);
-    if (slidersLutProg) gl2.deleteProgram(slidersLutProg);
-    if (blurHProg) gl2.deleteProgram(blurHProg);
-    if (blurVProg) gl2.deleteProgram(blurVProg);
-    if (unsharpProg) gl2.deleteProgram(unsharpProg);
-    if (curveProg) gl2.deleteProgram(curveProg);
-    if (hslProg) gl2.deleteProgram(hslProg);
-    if (calibProg) gl2.deleteProgram(calibProg);
+    if (!gl) return;
+    if (quadVao) gl.deleteVertexArray(quadVao);
+    if (sourceTex) gl.deleteTexture(sourceTex);
+    if (lutTex) gl.deleteTexture(lutTex);
+    if (sharpenTexA) gl.deleteTexture(sharpenTexA);
+    if (sharpenTexB) gl.deleteTexture(sharpenTexB);
+    if (sharpenFboA) gl.deleteFramebuffer(sharpenFboA);
+    if (sharpenFboB) gl.deleteFramebuffer(sharpenFboB);
+    if (curveTex) gl.deleteTexture(curveTex);
+    if (curveFbo) gl.deleteFramebuffer(curveFbo);
+    if (curveTexR) gl.deleteTexture(curveTexR);
+    if (curveTexG) gl.deleteTexture(curveTexG);
+    if (curveTexB) gl.deleteTexture(curveTexB);
+    if (hslTex) gl.deleteTexture(hslTex);
+    if (hslFbo) gl.deleteFramebuffer(hslFbo);
+    if (slidersLutProg) gl.deleteProgram(slidersLutProg);
+    if (blurHProg) gl.deleteProgram(blurHProg);
+    if (blurVProg) gl.deleteProgram(blurVProg);
+    if (unsharpProg) gl.deleteProgram(unsharpProg);
+    if (curveProg) gl.deleteProgram(curveProg);
+    if (hslProg) gl.deleteProgram(hslProg);
+    if (calibProg) gl.deleteProgram(calibProg);
     quadVao = sourceTex = lutTex = sharpenTexA = sharpenTexB = curveTex = hslTex = null;
     sharpenFboA = sharpenFboB = curveFbo = hslFbo = null;
     curveTexR = curveTexG = curveTexB = null;
     slidersLutProg = blurHProg = blurVProg = unsharpProg = curveProg = hslProg = null;
     calibIsFlat = true;
     calibProg = null;
-    ready2 = false;
+    ready = false;
   }
   return {
     init,
@@ -1028,7 +1107,7 @@ function createWebGLPipeline() {
     render,
     destroy,
     get ready() {
-      return ready2;
+      return ready;
     }
   };
 }

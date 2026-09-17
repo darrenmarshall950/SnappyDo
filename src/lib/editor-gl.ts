@@ -85,6 +85,11 @@ uniform float uCropH;
 uniform float uCAStrength;   // 0..100
 uniform float uCAX;          // -1..1
 uniform float uCAY;          // -1..1
+uniform float uVignette;     // 0..100, darken at edges
+uniform float uHighlights;    // -100..100, brighten/darken highlights
+uniform float uShadows;       // -100..100, brighten/darken shadows
+uniform float uWhites;        // -100..100, shift white point
+uniform float uBlacks;        // -100..100, shift black point
 
 // Rotate UV around center by angle in degrees
 vec2 rotateUv(vec2 uv, float angleDeg) {
@@ -100,11 +105,14 @@ vec2 applyStraightenAndCrop(vec2 uv) {
     uv = rotateUv(uv, uStraightenAngle);
   }
   if (uCropW > 0.0 && uCropH > 0.0) {
+    // Crop is specified in SOURCE UV. vUv is the canvas fragment position
+    // normalised to [0,1] which in fit mode equals source UV (canvas aspect
+    // matches source aspect). Sample source at vUv directly so only the
+    // cropped source region is rendered, preserving aspect.
     if (uv.x < uCropX || uv.x > uCropX + uCropW ||
         uv.y < uCropY || uv.y > uCropY + uCropH) {
       return vec2(-1.0);
     }
-    uv = (uv - vec2(uCropX, uCropY)) / vec2(uCropW, uCropH);
   }
   return clamp(uv, 0.0, 1.0);
 }
@@ -131,6 +139,36 @@ vec3 applySliders(vec3 c) {
   c.r += tintShift * 0.5;
   c.g += tintShift * 0.5;
   c.b -= tintShift;
+
+  // Tone-region adjustments (Lightroom-style).
+  float lum = dot(c, vec3(0.299, 0.587, 0.114));
+  float shadowsMask = 1.0 - smoothstep(0.0, 0.35, lum);
+  float highlightsMask = smoothstep(0.65, 1.0, lum);
+
+  // Shadows slider: positive lifts shadows, negative darkens
+  if (uShadows != 0.0) {
+    float sh = uShadows / 100.0 * 0.5;
+    c += sh * shadowsMask;
+  }
+  // Highlights slider: positive brightens, negative darkens
+  if (uHighlights != 0.0) {
+    float hi = uHighlights / 100.0 * 0.5;
+    c += hi * highlightsMask;
+  }
+  // Whites: shift white point globally toward c.r=1 (positive) or c.r=0 (negative)
+  if (uWhites != 0.0) {
+    float w = uWhites / 100.0 * 0.3;
+    // Apply proportional to how bright the pixel is
+    float wMask = smoothstep(0.4, 1.0, lum);
+    c += w * wMask;
+  }
+  // Blacks: shift black point toward 0 (negative) or lift (positive)
+  if (uBlacks != 0.0) {
+    float b = uBlacks / 100.0 * 0.3;
+    float bMask = 1.0 - smoothstep(0.0, 0.6, lum);
+    c += b * bMask;
+  }
+
   return clamp(c, 0.0, 1.0);
 }
 
@@ -160,6 +198,20 @@ void main() {
   vec3 lutResult = texture(uLut, clamped).rgb;
   // Mix sliders+LUT result with the slider-only result based on intensity.
   vec3 outColor = mix(adjusted, lutResult, uLutIntensity);
+
+  // Vignette: darken at edges. Compute distance from center of vUv (assumes
+  // canvas is centered on source UV). Strength 0..100 maps to 0..0.9 darkening.
+  if (uVignette > 0.0) {
+    // Aspect-correct distance: account for canvas aspect so the vignette
+    // is circular, not elliptical. Use a 'shorter axis' reference.
+    vec2 d = vUv - 0.5;
+    float r = length(d);
+    // At strength 100, factor at corner r=0.707 is ~0.30 (darken to 30%).
+    // Smooth ramp from 0 at center to full at corner.
+    float vig = 1.0 - smoothstep(0.2, 0.8, r) * (uVignette / 100.0) * 0.85;
+    outColor *= vig;
+  }
+
   fragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }
 `;
@@ -565,6 +617,12 @@ export interface WebGLPipelineState {
     shadow_tint?: number;   // -100..+100
     saturation?: number;    // 0..100
   };
+  /** Vignette: 0..100 (0 = no vignette, 100 = strong). */
+  vignette?: number;
+  highlights?: number;   // -100..100
+  shadows?: number;      // -100..100
+  whites?: number;       // -100..100
+  blacks?: number;       // -100..100
 }
 
 export interface WebGLPipeline {
@@ -587,6 +645,8 @@ export interface WebGLPipeline {
   /** True if init succeeded and pipeline is ready. */
   ready: boolean;
 }
+
+export function createWebGLPipeline(): WebGLPipeline {
 
   // ─── Curve resources ────────────────────────────────────────────────────────
   // Three 256x1 2D textures acting as 1D LUTs for R, G, B.
@@ -705,7 +765,19 @@ export interface WebGLPipeline {
 
   function setHsl(hslData: Record<string, HslRange>, colorGrading?: ColorGradingData) {
     if (!ready || !gl) return;
-    // Flag is now computed in render() via isEffectsFlat()
+    // Update lastState so render() picks up the new values via isEffectsFlat()
+    lastState.hsl = hslData;
+    if (colorGrading) lastState.colorGrading = colorGrading;
+  }
+
+  function setSplitToning(st: SplitToningData) {
+    if (!ready || !gl) return;
+    lastState.splitToning = st;
+  }
+
+  function setGrain(gr: GrainData) {
+    if (!ready || !gl) return;
+    lastState.grain = gr;
   }
 
   function setCurves(curves: CurveData) {
@@ -724,7 +796,6 @@ export interface WebGLPipeline {
   }
   // ─── End of curve resources ─────────────────────────────────────────────
 
-export function createWebGLPipeline(): WebGLPipeline {
   let gl: WebGL2RenderingContext | null = null;
   let canvasRef: HTMLCanvasElement | null = null;
   let ready = false;
@@ -754,7 +825,8 @@ export function createWebGLPipeline(): WebGLPipeline {
   // Cached state (last values uploaded — avoid redundant uniform updates)
   const lastState: WebGLPipelineState = {
     exposure: 0, contrast: 0, brightness: 0, saturation: 0,
-    temp: 0, tint: 0, sharpen: 0, lut_id: 0, lut_intensity: 0,
+    temp: 0, tint: 0, sharpen: 0, lut_id: 0, lut_intensity: 0, vignette: 0,
+    highlights: 0, shadows: 0, whites: 0, blacks: 0,
     straighten: 0,
     cropX: 0, cropY: 0, cropW: 0, cropH: 0,
     curve: undefined,
@@ -872,7 +944,7 @@ export function createWebGLPipeline(): WebGLPipeline {
         antialias: false,
         depth: false,
         stencil: false,
-        preserveDrawingBuffer: false,
+        preserveDrawingBuffer: true,
         premultipliedAlpha: false,
       });
       if (!gl) return false;
@@ -971,7 +1043,13 @@ export function createWebGLPipeline(): WebGLPipeline {
   }
 
   function updateState(state: Partial<WebGLPipelineState>) {
-    Object.assign(lastState, state);
+    // Skip undefined values so we don't overwrite numeric state with NaN.
+    // Object.assign would copy undefined keys through, which then becomes
+    // NaN in division-based uniform calculations.
+    for (const k in state) {
+      const v = (state as any)[k];
+      if (v !== undefined) (lastState as any)[k] = v;
+    }
   }
 
   function runPass(
@@ -980,6 +1058,7 @@ export function createWebGLPipeline(): WebGLPipeline {
     targetFbo: WebGLFramebuffer | null,
     width: number,
     height: number,
+    _label?: string,
   ) {
     if (!gl) return;
     gl.useProgram(prog);
@@ -989,6 +1068,7 @@ export function createWebGLPipeline(): WebGLPipeline {
     else gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     uniforms();
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+    const _err = gl.getError();
   }
 
   function render() {
@@ -996,6 +1076,7 @@ export function createWebGLPipeline(): WebGLPipeline {
     const ctx = gl;
     const w = canvasRef.width;
     const h = canvasRef.height;
+
 
     // Sharpen pipeline: only if sharpen > 0. Source → blur → unsharp.
     // Output: texture containing sharpened image.
@@ -1066,6 +1147,15 @@ export function createWebGLPipeline(): WebGLPipeline {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
 
+    // Rebind the correct input texture to TEXTURE0 before Pass 1.
+    // After sharpen pass, TEXTURE0 is bound to sharpenTexA (the sharpened result).
+    // After the lazy FBO alloc, TEXTURE0 got rebound to curveTex.
+    // We want Pass 1 (sliders-LUT) to read from the OUTPUT of sharpen (which
+    // is sharpenTexA when sharpen > 0, otherwise sourceTex). The `outputTex`
+    // variable was set earlier by the sharpen block; fall back to sourceTex.
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, outputTex);
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, curveFbo);
     gl.viewport(0, 0, w, h);
     runPass(slidersLutProg!, () => {
@@ -1073,8 +1163,12 @@ export function createWebGLPipeline(): WebGLPipeline {
       gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
       gl.uniform1i(gl.getUniformLocation(p, 'uLut'), 1);
       gl.uniform1f(gl.getUniformLocation(p, 'uLutSize'), 32);
+      // If no LUT is loaded (texture is null), force intensity to 0 so
+      // mix(adjusted, lutResult, 0) = adjusted (passthrough). With no LUT
+      // bound, sampling TEXTURE_3D returns garbage, making high intensities
+      // produce black output instead of just being a no-op.
       gl.uniform1f(gl.getUniformLocation(p, 'uLutIntensity'),
-        Math.max(0, Math.min(1, lastState.lut_intensity / 100)));
+        lutTex ? Math.max(0, Math.min(1, lastState.lut_intensity / 100)) : 0);
       gl.uniform1f(gl.getUniformLocation(p, 'uExposure'), lastState.exposure);
       gl.uniform1f(gl.getUniformLocation(p, 'uContrast'), lastState.contrast);
       gl.uniform1f(gl.getUniformLocation(p, 'uBrightness'), lastState.brightness);
@@ -1090,12 +1184,17 @@ export function createWebGLPipeline(): WebGLPipeline {
       gl.uniform1f(gl.getUniformLocation(p, 'uCAStrength'), lc.chromatic_aberration || 0);
       gl.uniform1f(gl.getUniformLocation(p, 'uCAX'), lc.chromatic_aberration_x || 0);
       gl.uniform1f(gl.getUniformLocation(p, 'uCAY'), lc.chromatic_aberration_y || 0);
-    }, null, w, h);
+      gl.uniform1f(gl.getUniformLocation(p, 'uVignette'), lastState.vignette || 0);
+      gl.uniform1f(gl.getUniformLocation(p, 'uHighlights'), lastState.highlights || 0);
+      gl.uniform1f(gl.getUniformLocation(p, 'uShadows'), lastState.shadows || 0);
+      gl.uniform1f(gl.getUniformLocation(p, 'uWhites'), lastState.whites || 0);
+      gl.uniform1f(gl.getUniformLocation(p, 'uBlacks'), lastState.blacks || 0);
+    }, curveFbo, w, h);
 
     // ── Pass 2: curve → canvas ─────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, w, h);
-    if (!curveIsIdentity && curveProg && curveTexR && curveTexG && curveTexB) {
+    if (curveProg && curveTexR && curveTexG && curveTexB) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, curveTex);
       gl.activeTexture(gl.TEXTURE1);
@@ -1110,7 +1209,7 @@ export function createWebGLPipeline(): WebGLPipeline {
         gl.uniform1i(gl.getUniformLocation(p, 'uCurveR'), 1);
         gl.uniform1i(gl.getUniformLocation(p, 'uCurveG'), 2);
         gl.uniform1i(gl.getUniformLocation(p, 'uCurveB'), 3);
-        gl.uniform1i(gl.getUniformLocation(p, 'uHasCurve'), 1);
+        gl.uniform1i(gl.getUniformLocation(p, "uHasCurve"), curveIsIdentity ? 0 : 1);
       }, null, w, h);
     }
 
