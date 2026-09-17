@@ -24,6 +24,34 @@ uniform float uBrightness;     // -100..100, multiplicative scale
 uniform float uSaturation;     // -100..100, 0 = grayscale at -100, +100 = 2x
 uniform float uTemp;           // -100..100, warm/cool tint (R-/B+ or R+/B-)
 uniform float uTint;           // -100..100, magenta/green tint
+uniform float uStraightenAngle; // -45..45 degrees
+uniform float uCropX;          // 0..1, crop after straighten
+uniform float uCropY;
+uniform float uCropW;
+uniform float uCropH;
+
+// Rotate UV around center by angle in degrees
+vec2 rotateUv(vec2 uv, float angleDeg) {
+  float a = angleDeg * 0.01745329251;
+  float s = sin(a), c = cos(a);
+  uv -= 0.5;
+  uv = vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
+  return uv + 0.5;
+}
+
+vec2 applyStraightenAndCrop(vec2 uv) {
+  if (abs(uStraightenAngle) > 0.01) {
+    uv = rotateUv(uv, uStraightenAngle);
+  }
+  if (uCropW > 0.0 && uCropH > 0.0) {
+    if (uv.x < uCropX || uv.x > uCropX + uCropW ||
+        uv.y < uCropY || uv.y > uCropY + uCropH) {
+      return vec2(-1.0);
+    }
+    uv = (uv - vec2(uCropX, uCropY)) / vec2(uCropW, uCropH);
+  }
+  return clamp(uv, 0.0, 1.0);
+}
 
 vec3 applySliders(vec3 c) {
   // Exposure (multiplicative). 2^(ev/100): ev=100 doubles, ev=-100 halves.
@@ -51,7 +79,12 @@ vec3 applySliders(vec3 c) {
 }
 
 void main() {
-  vec3 src = texture(uSource, vUv).rgb;
+  vec2 uv = applyStraightenAndCrop(vUv);
+  if (uv.x < 0.0) {
+    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+  vec3 src = texture(uSource, uv).rgb;
   vec3 adjusted = applySliders(src);
   // Sample 3D LUT. Clamp to ensure 0..1 even after slider overshoot,
   // since LUT cube indices are 0..size-1.
@@ -488,6 +521,11 @@ function createWebGLPipeline() {
     sharpen: 0,
     lut_id: 0,
     lut_intensity: 0,
+    straighten: 0,
+    cropX: 0,
+    cropY: 0,
+    cropW: 0,
+    cropH: 0,
     curve: void 0,
     hsl: void 0,
     colorGrading: void 0,
@@ -784,6 +822,11 @@ function createWebGLPipeline() {
       gl2.uniform1f(gl2.getUniformLocation(p, "uSaturation"), lastState2.saturation);
       gl2.uniform1f(gl2.getUniformLocation(p, "uTemp"), lastState2.temp);
       gl2.uniform1f(gl2.getUniformLocation(p, "uTint"), lastState2.tint);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uStraightenAngle"), lastState2.straighten || 0);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uCropX"), lastState2.cropX || 0);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uCropY"), lastState2.cropY || 0);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uCropW"), lastState2.cropW || 0);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uCropH"), lastState2.cropH || 0);
     }, null, w, h);
     gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
     gl2.viewport(0, 0, w, h);
