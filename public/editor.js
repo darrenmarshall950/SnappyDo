@@ -2019,7 +2019,13 @@
   function _cvSync() {
     const pipe = window._webgl;
     if (!pipe?.ready) return;
-    pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
+    let r = _cvData.r, g = _cvData.g, b = _cvData.b;
+    if (_cvCh === "rgb") {
+      r = _cvData.rgb;
+      g = _cvData.rgb;
+      b = _cvData.rgb;
+    }
+    pipe.setCurves({ rgb: _cvData.rgb, r, g, b });
     pipe.render();
   }
   function _cvRefresh() {

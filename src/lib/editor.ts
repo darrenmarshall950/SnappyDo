@@ -2367,7 +2367,18 @@ webglPipeline.render();
   function _cvSync() {
     const pipe = (window as any)._webgl;
     if (!pipe?.ready) return;
-    pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
+    // The GPU curve shader only reads R/G/B LUT samples (uCurveR/G/B), not a
+    // master rgb LUT. So when the user is editing the master rgb channel,
+    // mirror its curve into the R/G/B channels. If the user later switches to
+    // a per-channel mode and edits, the master rgb data is unused for that
+    // channel (r/g/b keep their own per-channel curves).
+    let r = _cvData.r, g = _cvData.g, b = _cvData.b;
+    if (_cvCh === "rgb") {
+      r = _cvData.rgb;
+      g = _cvData.rgb;
+      b = _cvData.rgb;
+    }
+    pipe.setCurves({ rgb: _cvData.rgb, r, g, b });
     pipe.render();
   }
 

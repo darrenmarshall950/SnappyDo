@@ -567,7 +567,6 @@ function createWebGLPipeline() {
     if (!ready || !gl) return;
     lastState.hsl = hslData;
     if (colorGrading) lastState.colorGrading = colorGrading;
-    console.log("[WGL] setHsl called: cg=", JSON.stringify(colorGrading));
   }
   function setSplitToning(st) {
     if (!ready || !gl) return;
