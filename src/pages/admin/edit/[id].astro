@@ -19,6 +19,8 @@ import { adaptImage } from '../../../lib/image-adapter';
 import { getLatestImageEdit, listImageEdits } from '../../../lib/db-image-edits';
 import { imgproxyUrl } from '../../../lib/imgproxy';
 
+import { buildLut, isFlat } from '../../../lib/curve';
+import type { CurveData } from '../../../lib/curve';
 function parseExif(json: string | null | undefined): Record<string, any> {
   if (!json) return {};
   try { return JSON.parse(json); } catch { return {}; }
@@ -605,6 +607,17 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
       #slider-lut-intensity { margin-top: 0.4rem; }
       #slider-lut-intensity.disabled,
       .slider.disabled input { opacity: 0.4; pointer-events: none; }
+
+    /* ── Tone Curve ───────────────────────────────── */
+    .panel-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+    .channel-tabs { display:flex; gap:3px; }
+    .ch-tab { padding:2px 7px; border:1px solid #444; border-radius:3px; background:#222; color:#888; cursor:pointer; font-size:11px; }
+    .ch-tab.active { background:#4af; color:#111; border-color:#4af; font-weight:600; }
+    .curve-container { display:flex; flex-direction:column; align-items:center; gap:5px; }
+    #cv-svg { background:#171717; border:1px solid #333; border-radius:2px; cursor:crosshair; display:block; }
+    .curve-actions { display:flex; align-items:center; gap:10px; }
+    .cv-info { font-size:10px; color:#555; }
+    .btn-sm { padding:2px 9px; font-size:11px; }
     </style>
   </head>
   <body>
@@ -729,6 +742,39 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
             <label>Tint</label>
             <input type="range" min="-200" max="200" step="1" />
             <span class="val">0</span>
+          </div>
+        </section>
+
+        <!-- ── Tone Curve ─────────────────────────────────────── -->
+        <section class="panel-section" id="section-curve">
+          <h3 class="panel-heading">
+            Tone Curve
+            <div class="channel-tabs">
+              <button class="ch-tab active" data-cvch="rgb">RGB</button>
+              <button class="ch-tab" data-cvch="r">R</button>
+              <button class="ch-tab" data-cvch="g">G</button>
+              <button class="ch-tab" data-cvch="b">B</button>
+            </div>
+          </h3>
+          <div class="curve-container">
+            <svg id="cv-svg" width="220" height="220" viewBox="0 0 220 220">
+              <defs>
+                <linearGradient id="cvHistG" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#fff" stop-opacity="0.75"/>
+                  <stop offset="100%" stop-opacity="0.02"/>
+                </linearGradient>
+              </defs>
+              <line x1="10" y1="110" x2="210" y2="110" stroke="#444" stroke-width="0.5"/>
+              <line x1="110" y1="10" x2="110" y2="210" stroke="#444" stroke-width="0.5"/>
+              <line id="cv-identity" x1="10" y1="210" x2="210" y2="10" stroke="#666" stroke-width="1" stroke-dasharray="3,3"/>
+              <path id="cv-hist" fill="url(#cvHistG)" stroke="none"/>
+              <path id="cv-path" stroke="#4af" stroke-width="1.5" fill="none"/>
+              <g id="cv-pts"></g>
+            </svg>
+            <div class="curve-actions">
+              <button id="cv-reset" class="btn btn-ghost btn-sm">Reset</button>
+              <span id="cv-info" class="cv-info"></span>
+            </div>
           </div>
         </section>
 
@@ -1676,7 +1722,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           whites: state.whites,
           blacks: state.blacks,
         });
-        webglPipeline.render();
+        
+        // Apply tone curve
+        webglPipeline.setCurves({
+          rgb: _cvData.rgb,
+          r: _cvData.r,
+          g: _cvData.g,
+          b: _cvData.b,
+        });
+
+webglPipeline.render();
         return true;
       }
 
@@ -2545,6 +2600,175 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
         }
       });
 
+
+  // ── Tone Curve ─────────────────────────────────────────────────────────────
+  type CVCh = 'rgb'|'r'|'g'|'b';
+  const _cvData: Record<CVCh, [number,number][]> = {
+    rgb: [[0,0],[255,255]], r: [[0,0],[255,255]], g: [[0,0],[255,255]], b: [[0,0],[255,255]]
+  };
+  let _cvCh: CVCh = 'rgb';
+  let _cvDrag: { idx: number } | null = null;
+  (window as any)._cvData = _cvData;
+
+  function _cvS(v: number) { return 10 + v * 200 / 255; }
+
+  function _cvPath(): string {
+    const pts = [..._cvData[_cvCh]].sort((a,b) => a[0]-b[0]) as [number,number][];
+    if (!pts.length) return '';
+    return 'M' + pts.map(([x,y]) => `${_cvS(x)},${_cvS(y)}`).join('L');
+  }
+
+  function _cvSync() {
+    const pipe = (window as any)._webgl;
+    if (!pipe?.ready) return;
+    pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
+    pipe.render();
+  }
+
+  function _cvRefresh() {
+    const path = document.getElementById('cv-path') as SVGPathElement | null;
+    const ptsEl = document.getElementById('cv-pts') as SVGGElement | null;
+    const info = document.getElementById('cv-info') as HTMLSpanElement | null;
+    if (path) path.setAttribute('d', _cvPath());
+    const custom = !isFlat({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
+    if (info) info.textContent = custom ? _cvCh.toUpperCase() : '';
+    if (!ptsEl) return;
+    ptsEl.innerHTML = '';
+    const color = _cvCh === 'rgb' ? '#ddd' : _cvCh === 'r' ? '#f66' : _cvCh === 'g' ? '#6e6' : '#66f';
+    for (let i = 0; i < _cvData[_cvCh].length; i++) {
+      const [x, y] = _cvData[_cvCh][i];
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('cx', String(_cvS(x))); c.setAttribute('cy', String(_cvS(y)));
+      c.setAttribute('r', '4'); c.setAttribute('fill', color);
+      c.setAttribute('stroke', '#111'); c.setAttribute('stroke-width', '1');
+      c.setAttribute('data-idx', String(i)); c.style.cursor = 'move';
+      ptsEl.appendChild(c);
+    }
+  }
+
+  function _cvAddPt(sx: number, sy: number) {
+    const x = Math.max(0, Math.min(255, Math.round((sx-10)*255/200)));
+    const y = Math.max(0, Math.min(255, Math.round((sy-10)*255/200)));
+    _cvData[_cvCh].push([x,y]);
+    _cvData[_cvCh].sort((a,b) => a[0]-b[0]);
+    _cvSync(); _cvRefresh();
+  }
+
+  function _cvRmPt(idx: number) {
+    if (_cvData[_cvCh].length <= 2) return;
+    _cvData[_cvCh].splice(idx, 1);
+    _cvSync(); _cvRefresh();
+  }
+
+  function _cvReset() {
+    for (const ch of ['rgb','r','g','b'] as CVCh[]) _cvData[ch] = [[0,0],[255,255]];
+    _cvCh = 'rgb';
+    document.querySelectorAll('.ch-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector('.ch-tab[data-cvch="rgb"]')?.classList.add('active');
+    _cvSync(); _cvRefresh();
+  }
+  (window as any)._cvReset = _cvReset;
+
+  function _cvInit() {
+    const svg = document.getElementById('cv-svg') as SVGSVGElement | null;
+    if (!svg) return;
+    const r = () => svg.getBoundingClientRect();
+
+    svg.addEventListener('mousedown', (e: MouseEvent) => {
+      e.preventDefault();
+      const rect = r();
+      const sx = (e.clientX - rect.left) * 220 / rect.width;
+      const sy = (e.clientY - rect.top) * 220 / rect.height;
+      let hit = -1;
+      for (let i = 0; i < _cvData[_cvCh].length; i++) {
+        const [x,y] = _cvData[_cvCh][i];
+        if (Math.abs(_cvS(x)-sx) < 8 && Math.abs(_cvS(y)-sy) < 8) { hit = i; break; }
+      }
+      if (hit >= 0) _cvDrag = { idx: hit }; else _cvAddPt(sx, sy);
+    });
+
+    window.addEventListener('mousemove', (e: MouseEvent) => {
+      if (!_cvDrag) return;
+      const rect = r();
+      const sx = (e.clientX - rect.left) * 220 / rect.width;
+      const sy = (e.clientY - rect.top) * 220 / rect.height;
+      const x = Math.max(0, Math.min(255, Math.round((sx-10)*255/200)));
+      const y = Math.max(0, Math.min(255, Math.round((sy-10)*255/200)));
+      _cvData[_cvCh][_cvDrag.idx] = [x, y];
+      _cvData[_cvCh].sort((a,b) => a[0]-b[0]);
+      _cvRefresh();
+    });
+
+    window.addEventListener('mouseup', () => { if (_cvDrag) { _cvDrag = null; _cvSync(); } });
+
+    svg.addEventListener('dblclick', (e: MouseEvent) => {
+      const rect = r();
+      const sx = (e.clientX - rect.left) * 220 / rect.width;
+      const sy = (e.clientY - rect.top) * 220 / rect.height;
+      for (let i = 0; i < _cvData[_cvCh].length; i++) {
+        const [x,y] = _cvData[_cvCh][i];
+        if (Math.abs(_cvS(x)-sx) < 8 && Math.abs(_cvS(y)-sy) < 8) { _cvRmPt(i); break; }
+      }
+    });
+
+    document.getElementById('cv-reset')?.addEventListener('click', _cvReset);
+    document.querySelectorAll('.ch-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.ch-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        _cvCh = (tab as HTMLElement).dataset.cvch as CVCh;
+        _cvRefresh();
+      });
+    });
+
+    _cvRefresh();
+  }
+
+  // ── Histogram ─────────────────────────────────────────────────────────────
+  function _histCapture() {
+    const canvas = document.getElementById('preview') as HTMLCanvasElement | null;
+    const pipe = (window as any)._webgl;
+    if (!canvas || !pipe?.ready) return;
+    const oc = document.createElement('canvas');
+    oc.width = 64; oc.height = 64;
+    const ctx = oc.getContext('2d')!;
+    ctx.drawImage(canvas, 0, 0, 64, 64);
+    const d = ctx.getImageData(0, 0, 64, 64).data;
+    const cnts: Record<string, Uint32Array> = {
+      r: new Uint32Array(256), g: new Uint32Array(256), b: new Uint32Array(256), l: new Uint32Array(256)
+    };
+    for (let i = 0; i < d.length; i += 4) {
+      const [rv,gv,bv] = [d[i], d[i+1], d[i+2]];
+      cnts.r[rv]++; cnts.g[gv]++; cnts.b[bv]++;
+      cnts.l[Math.round(0.299*rv + 0.587*gv + 0.114*bv)]++;
+    }
+    _histRender(cnts);
+  }
+
+  function _histRender(cnts: Record<string, Uint32Array>) {
+    const el = document.getElementById('cv-hist') as SVGPathElement | null;
+    if (!el) return;
+    const ch = _cvCh === 'rgb' ? 'l' : _cvCh;
+    const arr = cnts[ch];
+    let mx = 1; for (let i = 0; i < 256; i++) if (arr[i] > mx) mx = arr[i];
+    const bins = 200, bh = 200, bw = 200;
+    let d = `M10,210`;
+    for (let i = 0; i < bins; i++) {
+      const v = arr[Math.min(255, ((i * 256 / bins) | 0))];
+      d += ` L${10 + i*bw/bins},${10 + bh - (v/mx)*bh}`;
+    }
+    d += ` L${10+bins*bw/bins},210 Z`;
+    el.setAttribute('d', d);
+  }
+
+  let _histT: ReturnType<typeof setInterval> | null = null;
+  function _histStart() { if (!_histT) _histT = setInterval(_histCapture, 300); }
+  function _histStop() { if (_histT) { clearInterval(_histT); _histT = null; } }
+  window.addEventListener('beforeunload', _histStop);
+
+  // ── Boot ───────────────────────────────────────────────────────────────────
+  _cvInit();
+  _histStart();
       setStatus('Editor ready.');
 </script>
   </body>

@@ -185,7 +185,37 @@ void main() {
 }
 `;
 
+
+// ─── Curve pass fragment shader ────────────────────────────────────────────
+// Per-channel tone curves using three 256x1 2D textures as 1D LUTs.
+// Applied AFTER sliders-LUT pass (linear-light position, before saturation).
+const CURVE_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform sampler2D uCurveR;
+uniform sampler2D uCurveG;
+uniform sampler2D uCurveB;
+uniform bool     uHasCurve;
+
+void main() {
+  vec3 c = texture(uSource, vUv).rgb;
+  if (uHasCurve) {
+    c.r = texture(uCurveR, vec2(clamp(c.r,0.0,1.0), 0.5)).r;
+    c.g = texture(uCurveG, vec2(clamp(c.g,0.0,1.0), 0.5)).g;
+    c.b = texture(uCurveB, vec2(clamp(c.b,0.0,1.0), 0.5)).b;
+  }
+  fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+`;
+
 // ─── Main pipeline ────────────────────────────────────────────────────
+
+export interface CurvePoint { 0: number; 1: number; }
+export type CurveChannel = CurvePoint[];
+export interface CurveData { rgb: CurveChannel; r: CurveChannel; g: CurveChannel; b: CurveChannel; }
 
 export interface WebGLPipelineState {
   exposure: number;
@@ -197,6 +227,8 @@ export interface WebGLPipelineState {
   sharpen: number;     // 0..100
   lut_id: number;
   lut_intensity: number;
+  /** Curve control points per channel. Null/empty = identity (no-op). */
+  curve?: { rgb?: CurveChannel; r?: CurveChannel; g?: CurveChannel; b?: CurveChannel; } | null;
 }
 
 export interface WebGLPipeline {
@@ -206,6 +238,8 @@ export interface WebGLPipeline {
   setSource(image: HTMLImageElement | HTMLCanvasElement | ImageBitmap): void;
   /** Upload LUT data as a 3D texture (called once per LUT selection). */
   setLut(lut: { data: Float32Array | Uint8Array; size: number }): void;
+  /** Upload curve LUT textures. Called whenever curve data changes. */
+  setCurves(curves: CurveData): void;
   /** Update render state. Called on every slider change. */
   updateState(state: Partial<WebGLPipelineState>): void;
   /** Render the pipeline to the canvas. No-op if init() returned false. */
@@ -215,6 +249,92 @@ export interface WebGLPipeline {
   /** True if init succeeded and pipeline is ready. */
   ready: boolean;
 }
+
+  // ─── Curve resources ────────────────────────────────────────────────────────
+  // Three 256x1 2D textures acting as 1D LUTs for R, G, B.
+  let curveTexR: WebGLTexture | null = null;
+  let curveTexG: WebGLTexture | null = null;
+  let curveTexB: WebGLTexture | null = null;
+  // FBO + texture to hold sliders-LUT output before the curve pass.
+  let curveFbo: WebGLFramebuffer | null = null;
+  let curveTex: WebGLTexture | null = null;   // RGBA8, canvas size
+  // True when all channels are identity — skips the curve pass.
+  let curveIsIdentity = true;
+
+  // Pre-built identity LUT: lut[i] = i/255.
+  const _identityLut = new Float32Array(256);
+  for (let i = 0; i < 256; i++) _identityLut[i] = i / 255;
+
+  // ─── Curve helpers ──────────────────────────────────────────────────────
+  function _buildLut(ch: CurveChannel | undefined): Float32Array {
+    if (!ch || ch.length === 0) return new Float32Array(_identityLut);
+    const pts = [...ch].sort((a, b) => a[0] - b[0]) as CurveChannel;
+    const x0 = pts[0][0], x1 = pts[pts.length - 1][0];
+    const lut = new Float32Array(256);
+    for (let x = 0; x < 256; x++) {
+      if (x <= x0) { lut[x] = pts[0][1] / 255; continue; }
+      if (x >= x1) { lut[x] = pts[pts.length - 1][1] / 255; continue; }
+      let lo = 0, hi = pts.length - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (pts[mid][0] <= x) lo = mid; else hi = mid;
+      }
+      const xLo = pts[lo][0], yLo = pts[lo][1];
+      const xHi = pts[hi][0], yHi = pts[hi][1];
+      const t = (xHi === xLo) ? 0 : (x - xLo) / (xHi - xLo);
+      lut[x] = (yLo + t * (yHi - yLo)) / 255;
+    }
+    return lut;
+  }
+
+  function _isIdentity(ch: CurveChannel | undefined): boolean {
+    if (!ch || ch.length === 0) return true;
+    if (ch.length === 2 && ch[0][0] === 0 && ch[0][1] === 0 &&
+        ch[1][0] === 255 && ch[1][1] === 255) return true;
+    return false;
+  }
+
+  function _uploadCurveTex(tex: WebGLTexture, lut: Float32Array) {
+    if (!gl) return;
+    const rgba = new Uint8Array(256 * 4);
+    for (let i = 0; i < 256; i++) {
+      const v = Math.max(0, Math.min(255, Math.round(lut[i] * 255)));
+      rgba[i * 4] = v; rgba[i * 4 + 1] = v; rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = 255;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+
+  function _float32Eq(a: Float32Array, b: Float32Array): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 1e-6) return false;
+    return true;
+  }
+
+  let _lastCurveR: Float32Array | null = null;
+  let _lastCurveG: Float32Array | null = null;
+  let _lastCurveB: Float32Array | null = null;
+
+  function setCurves(curves: CurveData) {
+    if (!ready || !gl) return;
+    if (!curveTexR) { curveTexR = gl.createTexture()!; }
+    if (!curveTexG) { curveTexG = gl.createTexture()!; }
+    if (!curveTexB) { curveTexB = gl.createTexture()!; }
+    const chR = curves?.r, chG = curves?.g, chB = curves?.b;
+    curveIsIdentity = _isIdentity(chR) && _isIdentity(chG) && _isIdentity(chB);
+    const lutR = _buildLut(curveIsIdentity ? undefined : chR);
+    const lutG = _buildLut(curveIsIdentity ? undefined : chG);
+    const lutB = _buildLut(curveIsIdentity ? undefined : chB);
+    if (!_lastCurveR || !_float32Eq(lutR, _lastCurveR)) { _uploadCurveTex(curveTexR, lutR); _lastCurveR = lutR; }
+    if (!_lastCurveG || !_float32Eq(lutG, _lastCurveG)) { _uploadCurveTex(curveTexG, lutG); _lastCurveG = lutG; }
+    if (!_lastCurveB || !_float32Eq(lutB, _lastCurveB)) { _uploadCurveTex(curveTexB, lutB); _lastCurveB = lutB; }
+  }
+  // ─── End of curve resources ─────────────────────────────────────────────
 
 export function createWebGLPipeline(): WebGLPipeline {
   let gl: WebGL2RenderingContext | null = null;
@@ -226,6 +346,7 @@ export function createWebGLPipeline(): WebGLPipeline {
   let blurHProg: WebGLProgram | null = null;
   let blurVProg: WebGLProgram | null = null;
   let unsharpProg: WebGLProgram | null = null;
+  let curveProg: WebGLProgram | null = null;
 
   // Vertex array for full-screen quad
   let quadVao: WebGLVertexArrayObject | null = null;
@@ -246,6 +367,7 @@ export function createWebGLPipeline(): WebGLPipeline {
   const lastState: WebGLPipelineState = {
     exposure: 0, contrast: 0, brightness: 0, saturation: 0,
     temp: 0, tint: 0, sharpen: 0, lut_id: 0, lut_intensity: 0,
+    curve: undefined,
   };
 
   // ── Helpers ──
@@ -365,6 +487,7 @@ export function createWebGLPipeline(): WebGLPipeline {
       blurHProg = createProgram(VERT_SRC, BLUR_H_FRAG);
       blurVProg = createProgram(VERT_SRC, BLUR_V_FRAG);
       unsharpProg = createProgram(VERT_SRC, UNSHARP_FRAG);
+      curveProg = createProgram(VERT_SRC, CURVE_FRAG);
 
       setupQuad();
       ready = true;
@@ -523,6 +646,26 @@ export function createWebGLPipeline(): WebGLPipeline {
     if (lutTex) gl.bindTexture(gl.TEXTURE_3D, lutTex);
     gl.activeTexture(gl.TEXTURE0);
 
+    // ── Pass 1: sliders-LUT → curveFBO ─────────────────────────────────────
+    // Lazy-allocate curveFBO at canvas size.
+    if (!curveFbo || !curveTex || curveTex.width !== w || curveTex.height !== h) {
+      if (curveTex) gl.deleteTexture(curveTex);
+      if (curveFbo) gl.deleteFramebuffer(curveFbo);
+      curveTex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, curveTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      curveFbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, curveFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, curveTex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, curveFbo);
+    gl.viewport(0, 0, w, h);
     runPass(slidersLutProg!, () => {
       const p = slidersLutProg!;
       gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
@@ -538,8 +681,29 @@ export function createWebGLPipeline(): WebGLPipeline {
       gl.uniform1f(gl.getUniformLocation(p, 'uTint'), lastState.tint);
     }, null, w, h);
 
-    gl.bindVertexArray(null);
+    // ── Pass 2: curve → canvas ─────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, w, h);
+    if (!curveIsIdentity && curveProg && curveTexR && curveTexG && curveTexB) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, curveTex);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, curveTexR);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, curveTexG);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, curveTexB);
+      runPass(curveProg!, () => {
+        const p = curveProg!;
+        gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
+        gl.uniform1i(gl.getUniformLocation(p, 'uCurveR'), 1);
+        gl.uniform1i(gl.getUniformLocation(p, 'uCurveG'), 2);
+        gl.uniform1i(gl.getUniformLocation(p, 'uCurveB'), 3);
+        gl.uniform1i(gl.getUniformLocation(p, 'uHasCurve'), 1);
+      }, null, w, h);
+    }
+
+    gl.bindVertexArray(null);
   }
 
   function destroy() {
@@ -551,16 +715,23 @@ export function createWebGLPipeline(): WebGLPipeline {
     if (sharpenTexB) gl.deleteTexture(sharpenTexB);
     if (sharpenFboA) gl.deleteFramebuffer(sharpenFboA);
     if (sharpenFboB) gl.deleteFramebuffer(sharpenFboB);
+    if (curveTex) gl.deleteTexture(curveTex);
+    if (curveFbo) gl.deleteFramebuffer(curveFbo);
+    if (curveTexR) gl.deleteTexture(curveTexR);
+    if (curveTexG) gl.deleteTexture(curveTexG);
+    if (curveTexB) gl.deleteTexture(curveTexB);
     if (slidersLutProg) gl.deleteProgram(slidersLutProg);
     if (blurHProg) gl.deleteProgram(blurHProg);
     if (blurVProg) gl.deleteProgram(blurVProg);
     if (unsharpProg) gl.deleteProgram(unsharpProg);
-    quadVao = sourceTex = lutTex = sharpenTexA = sharpenTexB = null;
-    sharpenFboA = sharpenFboB = null;
-    slidersLutProg = blurHProg = blurVProg = unsharpProg = null;
+    if (curveProg) gl.deleteProgram(curveProg);
+    quadVao = sourceTex = lutTex = sharpenTexA = sharpenTexB = curveTex = null;
+    sharpenFboA = sharpenFboB = curveFbo = null;
+    curveTexR = curveTexG = curveTexB = null;
+    slidersLutProg = blurHProg = blurVProg = unsharpProg = curveProg = null;
     ready = false;
   }
 
-  return { init, setSource, setLut, updateState, render, destroy,
+  return { init, setSource, setLut, setCurves, updateState, render, destroy,
            get ready() { return ready; } };
 }
