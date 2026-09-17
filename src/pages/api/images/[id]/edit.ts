@@ -38,6 +38,7 @@ import {
 import { readAdminSession } from '../../../../lib/auth';
 import { imgproxyUrl } from '../../../../lib/imgproxy';
 import { buildDarktableXmp, readCameraWb } from '../../../../lib/darktable-xmp';
+import { applyHslToRgb, applyColorGradingToRgb, isHslFlat } from '../../../../lib/hsl';
 
 export const prerender = false;
 
@@ -185,6 +186,53 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
       raw: { width: W, height: H, channels: 3 },
       blend: 'multiply',
     }]);
+  }
+
+  // ---- HSL Color Mixer + Color Grading (pixel-level) ----
+  // Build HSL data from params
+  const RANGES = ['red','orange','yellow','green','aqua','blue','purple','magenta'];
+  const hslData: Record<string, {h:number; s:number; l:number}> = {};
+  for (const range of RANGES) {
+    const key = 'hsl_' + range;
+    hslData[key] = params[key] ?? { h: 0, s: 0, l: 0 };
+  }
+  const colorGradingParams = {
+    shadows_colour: params.cg_shadows_colour ?? [0, 0, 0],
+    midtones_colour: params.cg_midtones_colour ?? [0, 0, 0],
+    highlights_colour: params.cg_highlights_colour ?? [0, 0, 0],
+    global_colour: params.cg_global_colour ?? [0, 0, 0],
+    shadows_intensity: params.cg_shadows_intensity ?? 0,
+    midtones_intensity: params.cg_midtones_intensity ?? 0,
+    highlights_intensity: params.cg_highlights_intensity ?? 0,
+    global_intensity: params.cg_global_intensity ?? 0,
+    mode: params.cg_mode ?? 'saturation',
+  };
+
+  const hslNeedsProcessing = !isHslFlat(hslData);
+  const cgNeedsProcessing =
+    (colorGradingParams.shadows_intensity > 0 ||
+     colorGradingParams.midtones_intensity > 0 ||
+     colorGradingParams.highlights_intensity > 0 ||
+     colorGradingParams.global_intensity > 0);
+
+  if (hslNeedsProcessing || cgNeedsProcessing) {
+    const rgba = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { data, info } = rgba;
+    const pxCount = info.width * info.height;
+    for (let i = 0; i < pxCount; i++) {
+      const base = i * 4;
+      let r = data[base], g = data[base + 1], b = data[base + 2];
+      if (hslNeedsProcessing) {
+        [r, g, b] = applyHslToRgb(r, g, b, hslData);
+      }
+      if (cgNeedsProcessing) {
+        [r, g, b] = applyColorGradingToRgb(r, g, b, colorGradingParams);
+      }
+      data[base] = r; data[base + 1] = g; data[base + 2] = b;
+    }
+    pipeline = sharp(data, {
+      raw: { width: info.width, height: info.height, channels: 4 },
+    });
   }
 
   // ---- LUT pass (after all colour ops) ----

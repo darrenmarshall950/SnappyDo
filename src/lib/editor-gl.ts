@@ -211,11 +211,169 @@ void main() {
 }
 `;
 
+
+// ─── HSL Color Mixer + Color Grading fragment shader ─────────────────────
+// Applied AFTER the curve pass. Handles per-range HSL adjustments and
+// Lightroom-style three-way color grading.
+const HSL_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+
+// ── HSL helpers ─────────────────────────────────────────────────────────────
+vec3 rgb2hsl(vec3 c) {
+  float mx = max(c.r, max(c.g, c.b));
+  float mn = min(c.r, min(c.g, c.b));
+  float l = (mx + mn) * 0.5;
+  float s = 0.0;
+  float h = 0.0;
+  if (mx != mn) {
+    float d = mx - mn;
+    s = l > 0.5 ? d / (2.0 - mx - mn) : d / (mx + mn);
+    if (mx == c.r) h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+    else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+    else h = (c.r - c.g) / d + 4.0;
+    h /= 6.0;
+  }
+  return vec3(h, s, l);
+}
+
+vec3 hsl2rgb(vec3 hsl) {
+  float h = hsl.x;
+  float s = hsl.y;
+  float l = hsl.z;
+  if (s < 1e-5) return vec3(l);
+  float q = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
+  float p = 2.0 * l - q;
+  float r = fract(h + 1.0/3.0);
+  float g = fract(h);
+  float b = fract(h - 1.0/3.0);
+  r = r < 0.0 ? r + 1.0 : (r > 1.0 ? r - 1.0 : r);
+  b = b < 0.0 ? b + 1.0 : (b > 1.0 ? b - 1.0 : b);
+  vec3 c;
+  c.r = r < 1.0/6.0 ? p + (q - p) * 6.0 * r :
+        r < 0.5 ? q :
+        r < 2.0/3.0 ? p + (q - p) * (2.0/3.0 - r) * 6.0 : p;
+  c.g = g < 1.0/6.0 ? p + (q - p) * 6.0 * g :
+        g < 0.5 ? q :
+        g < 2.0/3.0 ? p + (q - p) * (2.0/3.0 - g) * 6.0 : p;
+  c.b = b < 1.0/6.0 ? p + (q - p) * 6.0 * b :
+        b < 0.5 ? q :
+        b < 2.0/3.0 ? p + (q - p) * (2.0/3.0 - b) * 6.0 : p;
+  return clamp(c, 0.0, 1.0);
+}
+
+float hueDist(float h1, float h2) {
+  float d = abs(h2 - h1);
+  return d > 0.5 ? 1.0 - d : d;
+}
+
+vec3 adjustRange(vec3 hsl, float centerH, float range, float dH, float dS, float dL) {
+  float d = hueDist(hsl.x, centerH);
+  float w = 1.0 - smoothstep(0.0, range, d);
+  hsl.x = fract(hsl.x + dH * w);
+  hsl.y = clamp(hsl.y + dS * w, 0.0, 1.0);
+  hsl.z = clamp(hsl.z + dL * w, 0.0, 1.0);
+  return hsl;
+}
+
+float luminance(vec3 c) {
+  return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// ── Color grading ───────────────────────────────────────────────────────────
+uniform vec3  uCgShadowsColour;
+uniform vec3  uCgMidtonesColour;
+uniform vec3  uCgHighlightsColour;
+uniform vec3  uCgGlobalColour;
+uniform float uCgShadowsIntensity;
+uniform float uCgMidtonesIntensity;
+uniform float uCgHighlightsIntensity;
+uniform float uCgGlobalIntensity;
+uniform int   uCgMode;
+
+vec3 applyColorGrading(vec3 c) {
+  float lum = luminance(c);
+  float shadowsMask = 1.0 - smoothstep(0.0, 0.35, lum);
+  float highlightsMask = smoothstep(0.65, 1.0, lum);
+  float midtonesMask = clamp(1.0 - shadowsMask - highlightsMask, 0.0, 1.0);
+
+  float shI = uCgShadowsIntensity / 100.0;
+  float miI = uCgMidtonesIntensity / 100.0;
+  float hiI = uCgHighlightsIntensity / 100.0;
+  float glI = uCgGlobalIntensity / 100.0;
+
+  if (shI > 0.0 || miI > 0.0 || hiI > 0.0 || glI > 0.0) {
+    vec3 tint = vec3(0.0);
+    if (shI > 0.0) tint += uCgShadowsColour * shadowsMask * shI;
+    if (miI > 0.0) tint += uCgMidtonesColour * midtonesMask * miI;
+    if (hiI > 0.0) tint += uCgHighlightsColour * highlightsMask * hiI;
+
+    if (uCgMode == 0) {
+      c = mix(c, c + tint * 0.5, clamp(length(tint), 0.0, 1.0));
+    } else {
+      c += tint;
+    }
+    if (glI > 0.0) {
+      c += uCgGlobalColour * glI * 0.5;
+    }
+  }
+  return c;
+}
+
+uniform float uHslRed_h; uniform float uHslRed_s; uniform float uHslRed_l;
+uniform float uHslOrange_h; uniform float uHslOrange_s; uniform float uHslOrange_l;
+uniform float uHslYellow_h; uniform float uHslYellow_s; uniform float uHslYellow_l;
+uniform float uHslGreen_h; uniform float uHslGreen_s; uniform float uHslGreen_l;
+uniform float uHslAqua_h; uniform float uHslAqua_s; uniform float uHslAqua_l;
+uniform float uHslBlue_h; uniform float uHslBlue_s; uniform float uHslBlue_l;
+uniform float uHslPurple_h; uniform float uHslPurple_s; uniform float uHslPurple_l;
+uniform float uHslMagenta_h; uniform float uHslMagenta_s; uniform float uHslMagenta_l;
+uniform bool  uHslActive;
+
+void main() {
+  vec3 c = texture(uSource, vUv).rgb;
+
+  if (uHslActive) {
+    vec3 hsl = rgb2hsl(c);
+    float range = 0.125;
+    hsl = adjustRange(hsl, 0.0/8.0, range, uHslRed_h,    uHslRed_s,    uHslRed_l);
+    hsl = adjustRange(hsl, 1.0/8.0, range, uHslOrange_h, uHslOrange_s, uHslOrange_l);
+    hsl = adjustRange(hsl, 2.0/8.0, range, uHslYellow_h, uHslYellow_s, uHslYellow_l);
+    hsl = adjustRange(hsl, 3.0/8.0, range, uHslGreen_h,   uHslGreen_s,   uHslGreen_l);
+    hsl = adjustRange(hsl, 4.0/8.0, range, uHslAqua_h,   uHslAqua_s,   uHslAqua_l);
+    hsl = adjustRange(hsl, 5.0/8.0, range, uHslBlue_h,   uHslBlue_s,   uHslBlue_l);
+    hsl = adjustRange(hsl, 6.0/8.0, range, uHslPurple_h, uHslPurple_s, uHslPurple_l);
+    hsl = adjustRange(hsl, 7.0/8.0, range, uHslMagenta_h, uHslMagenta_s, uHslMagenta_l);
+    c = hsl2rgb(hsl);
+  }
+
+  c = applyColorGrading(c);
+  fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+`;
+
 // ─── Main pipeline ────────────────────────────────────────────────────
 
 export interface CurvePoint { 0: number; 1: number; }
 export type CurveChannel = CurvePoint[];
 export interface CurveData { rgb: CurveChannel; r: CurveChannel; g: CurveChannel; b: CurveChannel; }
+
+export interface HslRange { h: number; s: number; l: number; }
+
+export interface ColorGradingData {
+  shadows_colour: number[];    // [r, g, b] 0..255
+  midtones_colour: number[];
+  highlights_colour: number[];
+  global_colour: number[];
+  shadows_intensity: number;   // 0..100
+  midtones_intensity: number;
+  highlights_intensity: number;
+  global_intensity: number;
+  mode: 'saturation' | 'luminance';
+}
 
 export interface WebGLPipelineState {
   exposure: number;
@@ -229,6 +387,10 @@ export interface WebGLPipelineState {
   lut_intensity: number;
   /** Curve control points per channel. Null/empty = identity (no-op). */
   curve?: { rgb?: CurveChannel; r?: CurveChannel; g?: CurveChannel; b?: CurveChannel; } | null;
+  /** HSL Color Mixer — per-range H/S/L offsets in -100..100. */
+  hsl?: Record<string, HslRange>;
+  /** Lightroom-style color grading. */
+  colorGrading?: ColorGradingData;
 }
 
 export interface WebGLPipeline {
@@ -240,6 +402,8 @@ export interface WebGLPipeline {
   setLut(lut: { data: Float32Array | Uint8Array; size: number }): void;
   /** Upload curve LUT textures. Called whenever curve data changes. */
   setCurves(curves: CurveData): void;
+  /** Upload HSL Color Mixer + Color Grading state. */
+  setHsl(hslData: Record<string, HslRange>, colorGrading?: ColorGradingData): void;
   /** Update render state. Called on every slider change. */
   updateState(state: Partial<WebGLPipelineState>): void;
   /** Render the pipeline to the canvas. No-op if init() returned false. */
@@ -260,6 +424,13 @@ export interface WebGLPipeline {
   let curveTex: WebGLTexture | null = null;   // RGBA8, canvas size
   // True when all channels are identity — skips the curve pass.
   let curveIsIdentity = true;
+
+  // HSL program + FBO
+  let hslProg: WebGLProgram | null = null;
+  let hslFbo: WebGLFramebuffer | null = null;
+  let hslTex: WebGLTexture | null = null;
+  // True when all HSL values are zero — skips the hsl pass.
+  let hslIsFlat = true;
 
   // Pre-built identity LUT: lut[i] = i/255.
   const _identityLut = new Float32Array(256);
@@ -320,6 +491,23 @@ export interface WebGLPipeline {
   let _lastCurveG: Float32Array | null = null;
   let _lastCurveB: Float32Array | null = null;
 
+  // ── HSL + Color Grading state ─────────────────────────────────────────────
+  function isHslFlat(hslData: Record<string, HslRange>): boolean {
+    if (!hslData) return true;
+    for (const key of Object.keys(hslData)) {
+      const r = hslData[key];
+      if (Math.abs(r.h) > 1e-4 || Math.abs(r.s) > 1e-4 || Math.abs(r.l) > 1e-4) return false;
+    }
+    return true;
+  }
+
+  function setHsl(hslData: Record<string, HslRange>, colorGrading?: ColorGradingData) {
+    if (!ready || !gl) return;
+    hslIsFlat = isHslFlat(hslData) && !colorGrading;
+    // All HSL uniform values are uploaded every render() call from lastHslState
+    // so we just record the flag here.
+  }
+
   function setCurves(curves: CurveData) {
     if (!ready || !gl) return;
     if (!curveTexR) { curveTexR = gl.createTexture()!; }
@@ -368,6 +556,13 @@ export function createWebGLPipeline(): WebGLPipeline {
     exposure: 0, contrast: 0, brightness: 0, saturation: 0,
     temp: 0, tint: 0, sharpen: 0, lut_id: 0, lut_intensity: 0,
     curve: undefined,
+    hsl: undefined,
+    colorGrading: undefined,
+  };
+
+  // Cached HSL state for hsl pass uniforms
+  let lastHslState: { hsl: Record<string, HslRange>; cg: ColorGradingData | undefined } = {
+    hsl: {}, cg: undefined,
   };
 
   // ── Helpers ──
@@ -488,6 +683,7 @@ export function createWebGLPipeline(): WebGLPipeline {
       blurVProg = createProgram(VERT_SRC, BLUR_V_FRAG);
       unsharpProg = createProgram(VERT_SRC, UNSHARP_FRAG);
       curveProg = createProgram(VERT_SRC, CURVE_FRAG);
+      hslProg = createProgram(VERT_SRC, HSL_FRAG);
 
       setupQuad();
       ready = true;
@@ -703,6 +899,68 @@ export function createWebGLPipeline(): WebGLPipeline {
       }, null, w, h);
     }
 
+    // ── Pass 3: HSL Color Mixer + Color Grading → canvas ───────────────────
+    if (!hslIsFlat && hslProg) {
+      // Lazy-allocate hslFBO at canvas size (not needed but keeps structure)
+      if (!hslFbo || !hslTex || hslTex.width !== w || hslTex.height !== h) {
+        if (hslTex) gl.deleteTexture(hslTex);
+        if (hslFbo) gl.deleteFramebuffer(hslFbo);
+        hslTex = gl.createTexture()!;
+        gl.bindTexture(gl.TEXTURE_2D, hslTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        hslFbo = gl.createFramebuffer()!;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, hslFbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, hslTex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+
+      // Source for hsl pass: the curve pass output is already on canvas.
+      // We bind the canvas texture (via curveTex which holds the result).
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, curveTex || curveFbo ? curveTex : sourceTex!);
+      runPass(hslProg, () => {
+        const p = hslProg!;
+        gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
+
+        const hsl = lastState.hsl || {};
+        const cg = lastState.colorGrading;
+        const RANGES = ['Red','Orange','Yellow','Green','Aqua','Blue','Purple','Magenta'];
+        RANGES.forEach((name, i) => {
+          const r = hsl['hsl_' + name.toLowerCase()] || { h: 0, s: 0, l: 0 };
+          gl.uniform1f(gl.getUniformLocation(p, `uHsl${name}_h`), r.h / 100);
+          gl.uniform1f(gl.getUniformLocation(p, `uHsl${name}_s`), r.s / 100);
+          gl.uniform1f(gl.getUniformLocation(p, `uHsl${name}_l`), r.l / 100);
+        });
+        gl.uniform1i(gl.getUniformLocation(p, 'uHslActive'), hslIsFlat ? 0 : 1);
+
+        if (cg) {
+          gl.uniform3fv(gl.getUniformLocation(p, 'uCgShadowsColour'), [(cg.shadows_colour[0] ?? 0)/255, (cg.shadows_colour[1] ?? 0)/255, (cg.shadows_colour[2] ?? 0)/255]);
+          gl.uniform3fv(gl.getUniformLocation(p, 'uCgMidtonesColour'), [(cg.midtones_colour[0] ?? 0)/255, (cg.midtones_colour[1] ?? 0)/255, (cg.midtones_colour[2] ?? 0)/255]);
+          gl.uniform3fv(gl.getUniformLocation(p, 'uCgHighlightsColour'), [(cg.highlights_colour[0] ?? 0)/255, (cg.highlights_colour[1] ?? 0)/255, (cg.highlights_colour[2] ?? 0)/255]);
+          gl.uniform3fv(gl.getUniformLocation(p, 'uCgGlobalColour'), [(cg.global_colour[0] ?? 0)/255, (cg.global_colour[1] ?? 0)/255, (cg.global_colour[2] ?? 0)/255]);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCgShadowsIntensity'), cg.shadows_intensity ?? 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCgMidtonesIntensity'), cg.midtones_intensity ?? 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCgHighlightsIntensity'), cg.highlights_intensity ?? 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCgGlobalIntensity'), cg.global_intensity ?? 0);
+          gl.uniform1i(gl.getUniformLocation(p, 'uCgMode'), cg.mode === 'luminance' ? 1 : 0);
+        } else {
+          gl.uniform3f(gl.getUniformLocation(p, 'uCgShadowsColour'), 0, 0, 0);
+          gl.uniform3f(gl.getUniformLocation(p, 'uCgMidtonesColour'), 0, 0, 0);
+          gl.uniform3f(gl.getUniformLocation(p, 'uCgHighlightsColour'), 0, 0, 0);
+          gl.uniform3f(gl.getUniformLocation(p, 'uCgGlobalColour'), 0, 0, 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCgShadowsIntensity'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCgMidtonesIntensity'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCgHighlightsIntensity'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCgGlobalIntensity'), 0);
+          gl.uniform1i(gl.getUniformLocation(p, 'uCgMode'), 0);
+        }
+      }, null, w, h);
+    }
+
     gl.bindVertexArray(null);
   }
 
@@ -720,18 +978,21 @@ export function createWebGLPipeline(): WebGLPipeline {
     if (curveTexR) gl.deleteTexture(curveTexR);
     if (curveTexG) gl.deleteTexture(curveTexG);
     if (curveTexB) gl.deleteTexture(curveTexB);
+    if (hslTex) gl.deleteTexture(hslTex);
+    if (hslFbo) gl.deleteFramebuffer(hslFbo);
     if (slidersLutProg) gl.deleteProgram(slidersLutProg);
     if (blurHProg) gl.deleteProgram(blurHProg);
     if (blurVProg) gl.deleteProgram(blurVProg);
     if (unsharpProg) gl.deleteProgram(unsharpProg);
     if (curveProg) gl.deleteProgram(curveProg);
-    quadVao = sourceTex = lutTex = sharpenTexA = sharpenTexB = curveTex = null;
-    sharpenFboA = sharpenFboB = curveFbo = null;
+    if (hslProg) gl.deleteProgram(hslProg);
+    quadVao = sourceTex = lutTex = sharpenTexA = sharpenTexB = curveTex = hslTex = null;
+    sharpenFboA = sharpenFboB = curveFbo = hslFbo = null;
     curveTexR = curveTexG = curveTexB = null;
-    slidersLutProg = blurHProg = blurVProg = unsharpProg = curveProg = null;
+    slidersLutProg = blurHProg = blurVProg = unsharpProg = curveProg = hslProg = null;
     ready = false;
   }
 
-  return { init, setSource, setLut, setCurves, updateState, render, destroy,
+  return { init, setSource, setLut, setCurves, setHsl, updateState, render, destroy,
            get ready() { return ready; } };
 }
