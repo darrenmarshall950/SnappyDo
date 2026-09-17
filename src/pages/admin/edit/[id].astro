@@ -81,6 +81,23 @@ const initialParams = latestEdit ? JSON.parse(latestEdit.params_json) : {
   grain_amount: 0, grain_size: 25,
   // Effects
   dehaze: 0,
+  // Lens Corrections
+  lens_corrections: {
+    enabled: false,
+    remove_baseline_exposure: 0,
+    chromatic_aberration: 0,
+    chromatic_aberration_x: 0,
+    chromatic_aberration_y: 0,
+  },
+  // Calibration (Camera Profile)
+  calibration: {
+    shadow_tint: 0,
+    saturation: 0,
+  },
+  // Spot Removals
+  spot_removals: [],
+  // Snapshots
+  snapshots: [],
 };
 
 // Source URL — use the original file directly so we get full resolution.
@@ -912,6 +929,17 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           </details>
         </section>
 
+        <section class="panel-section" id="section-spot-removal">
+          <h3>Spot Removal <button id="btn-reset-spot" class="btn-ghost">reset all</button></h3>
+          <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem;align-items:center">
+            <button class="btn btn-sm" id="btn-spot-add-clone">+ Clone</button>
+            <button class="btn btn-sm" id="btn-spot-add-heal">+ Heal</button>
+            <span id="spot-mode-label" style="font-size:0.7rem;color:#888;margin-left:0.3rem">Click canvas to add spot</span>
+          </div>
+          <div id="spot-list" style="max-height:120px;overflow-y:auto;font-size:0.72rem;display:flex;flex-direction:column;gap:2px"></div>
+          <canvas id="spot-overlay-canvas" style="position:absolute;pointer-events:none;top:0;left:0;width:100%;height:100%"></canvas>
+        </section>
+
         {isRaw && (
           <section class="panel-section" id="section-raw">
             <h3>RAW <button id="btn-reset-raw">reset</button></h3>
@@ -947,6 +975,30 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
               <label for="raw-lens-on">Auto lens corrections</label>
               <span id="lens-corrections-badge" class="lens-badge" style="display:none">LENS ON</span>
             </div>
+
+            <details class="fx-details" style="margin-top:0.5rem">
+              <summary>Lens Corrections</summary>
+              <div class="slider" data-key="lens_corrections.remove_baseline_exposure">
+                <label>Baseline Exposure</label>
+                <input type="range" min="-5" max="5" step="0.1" />
+                <span class="val">0</span>
+              </div>
+              <div class="slider" data-key="lens_corrections.chromatic_aberration">
+                <label>Chromatic Aberration</label>
+                <input type="range" min="0" max="100" step="1" />
+                <span class="val">0</span>
+              </div>
+              <div class="slider" data-key="lens_corrections.chromatic_aberration_x">
+                <label>CA X</label>
+                <input type="range" min="-1" max="1" step="0.05" />
+                <span class="val">0</span>
+              </div>
+              <div class="slider" data-key="lens_corrections.chromatic_aberration_y">
+                <label>CA Y</label>
+                <input type="range" min="-1" max="1" step="0.05" />
+                <span class="val">0</span>
+              </div>
+            </details>
           </section>
         )}
 
@@ -1097,6 +1149,28 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           </details>
         </section>
 
+        <section class="panel-section" id="section-calibration">
+          <h3>Calibration <button id="btn-reset-calibration" class="btn-ghost">reset</button></h3>
+          <div class="slider" data-key="calibration.shadow_tint">
+            <label>Shadow Tint</label>
+            <input type="range" min="-100" max="100" step="1" />
+            <span class="val">0</span>
+          </div>
+          <div class="slider" data-key="calibration.saturation">
+            <label>Saturation</label>
+            <input type="range" min="0" max="100" step="1" />
+            <span class="val">0</span>
+          </div>
+        </section>
+
+
+        <section class="panel-section" id="section-snapshots">
+          <h3>Snapshots <button id="btn-snapshot-save" class="btn btn-sm">Save Current</button></h3>
+          <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem;align-items:center">
+            <input type="text" id="snapshot-name-input" placeholder="Snapshot name..." style="flex:1;background:#1a1a1a;border:1px solid #333;color:#fafafa;border-radius:5px;padding:0.3rem 0.5rem;font-size:0.75rem" />
+          </div>
+          <div id="snapshot-list" style="max-height:140px;overflow-y:auto;font-size:0.72rem;display:flex;flex-direction:column;gap:2px"></div>
+        </section>
 
         <section class="panel-section" id="section-history">
           <h3>
@@ -2011,6 +2085,11 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           whites: state.whites,
           blacks: state.blacks,
           dehaze: (state as any).dehaze ?? 0,
+          lens_corrections: (state as any).lens_corrections ?? {
+            enabled: false, remove_baseline_exposure: 0,
+            chromatic_aberration: 0, chromatic_aberration_x: 0, chromatic_aberration_y: 0,
+          },
+          calibration: (state as any).calibration ?? { shadow_tint: 0, saturation: 0 },
           straighten: (state as any).straighten ?? 0,
           cropX: (state as any).crop?.x ?? 0,
           cropY: (state as any).crop?.y ?? 0,
@@ -2817,21 +2896,50 @@ webglPipeline.render();
       });
 
       // ---- Sliders ----
+
+      // Helper: set a potentially nested key in state
+      function setNestedState(state, key, value) {
+        if (key.includes(".")) {
+          const parts = key.split(".");
+          let obj = state;
+          for (let i = 0; i < parts.length - 1; i++) {
+            if (!obj[parts[i]]) obj[parts[i]] = {};
+            obj = obj[parts[i]];
+          }
+          obj[parts[parts.length - 1]] = value;
+        } else {
+          state[key] = value;
+        }
+      }
+      function getNestedState(state, key) {
+        if (key.includes(".")) {
+          const parts = key.split(".");
+          let obj = state;
+          for (let i = 0; i < parts.length - 1; i++) {
+            if (!obj[parts[i]]) return undefined;
+            obj = obj[parts[i]];
+          }
+          return obj[parts[parts.length - 1]];
+        }
+        return state[key];
+      }
+
       document.querySelectorAll('.slider').forEach((wrap) => {
         const key = wrap.dataset.key;
         const input = wrap.querySelector('input');
         const valEl = wrap.querySelector('.val');
-        input.value = state[key];
-        valEl.textContent = state[key];
+        const initVal = getNestedState(state, key);
+        input.value = String(initVal ?? 0);
+        valEl.textContent = String(initVal ?? 0);
         input.addEventListener('input', () => {
-          const prevVal = state[key];
+          const prevVal = getNestedState(state, key);
           const v = Number(input.value);
           // Push history entry BEFORE updating state (skip if same value)
           if (v !== prevVal && !_ignoreHistory) {
             const snap = JSON.parse(JSON.stringify(state));
             pushHistory((document.querySelector('.slider[data-key="' + key + '"] label')?.textContent || key) + ' ' + v, snap);
           }
-          state[key] = v;
+          setNestedState(state, key, v);
           valEl.textContent = v;
           if (key === 'sharpen') {
             _sharpenCacheKey = -1; // force re-blur next draw
@@ -3029,6 +3137,16 @@ webglPipeline.render();
           }
           const lensCb = document.getElementById('raw-lens-on');
           if (lensCb) lensCb.checked = false;
+          state.lens_corrections = { enabled: false, remove_baseline_exposure: 0, chromatic_aberration: 0, chromatic_aberration_x: 0, chromatic_aberration_y: 0 };
+          document.querySelectorAll('.slider[data-key^="lens_corrections."]').forEach((wrap) => {
+            const input = wrap.querySelector('input');
+            const valEl = wrap.querySelector('.val');
+            const key = wrap.dataset.key || '';
+            const nestedKey = key.split('.')[1];
+            const v = nestedKey ? (state.lens_corrections || {})[nestedKey] ?? 0 : 0;
+            if (input) input.value = String(v);
+            if (valEl) valEl.textContent = String(v);
+          });
         };
       }
       // Wire the lens checkbox to state
@@ -3041,6 +3159,25 @@ webglPipeline.render();
           scheduleDraw();
           scheduleRawPreviewFetch('lens');
         });
+      }
+
+
+      // Calibration reset
+      const btnResetCalib = document.getElementById('btn-reset-calibration');
+      if (btnResetCalib) {
+        btnResetCalib.onclick = () => {
+          state.calibration = { shadow_tint: 0, saturation: 0 };
+          document.querySelectorAll(".slider[data-key^=\"calibration.\"]").forEach((wrap) => {
+            const input = wrap.querySelector("input");
+            const valEl = wrap.querySelector(".val");
+            const key = wrap.dataset.key || "";
+            const nestedKey = key.split(".")[1];
+            const v = nestedKey ? (state.calibration || {})[nestedKey] ?? 0 : 0;
+            if (input) input.value = String(v);
+            if (valEl) valEl.textContent = String(v);
+          });
+          scheduleDraw();
+        };
       }
 
       // ---- Crop drag (works on the canvas) ----
@@ -3558,6 +3695,203 @@ webglPipeline.render();
   function _histStart() { if (!_histT) _histT = setInterval(_histCapture, 300); }
   function _histStop() { if (_histT) { clearInterval(_histT); _histT = null; } }
   window.addEventListener('beforeunload', _histStop);
+
+  // ── Snapshots ─────────────────────────────────────────────────────────────
+      function renderSnapshotList() {
+        const list = document.getElementById("snapshot-list");
+        if (!list) return;
+        list.innerHTML = "";
+        const snaps: any[] = state.snapshots || [];
+        snaps.forEach((s, idx) => {
+          const div = document.createElement("div");
+          div.style.cssText = "display:flex;gap:4px;align-items:center;padding:3px 6px;background:#1a1a1a;border-radius:4px;cursor:pointer";
+          div.innerHTML = "<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">" + (s.name || "Unnamed") + "</span><button data-del-idx="" + idx + "" style="background:none;border:none;color:#888;cursor:pointer;font-size:0.7rem;padding:0 2px">X</button>";
+          div.querySelector("span")?.addEventListener("click", () => restoreSnapshot(idx));
+          div.querySelector("[data-del-idx]")?.addEventListener("click", (e) => { e.stopPropagation(); deleteSnapshot(idx); });
+          list.appendChild(div);
+        });
+      }
+      function saveSnapshot() {
+        const input = document.getElementById("snapshot-name-input") as HTMLInputElement;
+        const name = input?.value?.trim() || ("Snapshot " + ((state.snapshots?.length || 0) + 1));
+        const snap = {
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+          name,
+          state: JSON.parse(JSON.stringify(state)),
+          created_at: new Date().toISOString(),
+        };
+        if (!state.snapshots) state.snapshots = [];
+        state.snapshots.push(snap);
+        const input2 = document.getElementById("snapshot-name-input") as HTMLInputElement;
+        if (input2) input2.value = "";
+        renderSnapshotList();
+        toast("Snapshot saved: " + name);
+      }
+      function restoreSnapshot(idx: number) {
+        const snaps: any[] = state.snapshots || [];
+        if (!snaps[idx]) return;
+        const snap = snaps[idx];
+        // Deep merge snapshot state into current state (preserve snapshots array)
+        const snapState = JSON.parse(JSON.stringify(snap.state));
+        delete snapState.snapshots;
+        Object.assign(state, snapState);
+        // Re-render all slider UI
+        document.querySelectorAll(".slider").forEach((wrap) => {
+          const key = wrap.dataset.key;
+          const input = wrap.querySelector("input") as HTMLInputElement;
+          const valEl = wrap.querySelector(".val");
+          if (!key || !input) return;
+          const v = getNestedState(state, key);
+          input.value = String(v ?? 0);
+          if (valEl) valEl.textContent = String(v ?? 0);
+        });
+        renderSnapshotList();
+        scheduleDraw();
+        toast("Restored: " + snap.name);
+      }
+      function deleteSnapshot(idx: number) {
+        if (!state.snapshots) return;
+        state.snapshots.splice(idx, 1);
+        renderSnapshotList();
+      }
+
+      // ── Spot Removal ───────────────────────────────────────────────────────────
+      let spotMode: "clone" | "heal" | null = null;
+      let currentSpot: any = null;
+      let isDragging = false;
+      const spotOverlay = document.getElementById("spot-overlay-canvas") as HTMLCanvasElement;
+      const spotCtx = spotOverlay?.getContext("2d");
+
+      function renderSpotOverlay() {
+        if (!spotOverlay || !spotCtx) return;
+        const dpr = window.devicePixelRatio || 1;
+        spotOverlay.width = spotOverlay.offsetWidth * dpr;
+        spotOverlay.height = spotOverlay.offsetHeight * dpr;
+        spotCtx.clearRect(0, 0, spotOverlay.width, spotOverlay.height);
+        const spots: any[] = state.spot_removals || [];
+        spots.forEach((s, i) => {
+          const cx = s.x * spotOverlay.offsetWidth;
+          const cy = s.y * spotOverlay.offsetHeight;
+          const r = s.radius * (spotOverlay.offsetWidth / canvas.offsetWidth);
+          const scx = s.srcX * spotOverlay.offsetWidth;
+          const scy = s.srcY * spotOverlay.offsetHeight;
+          spotCtx.beginPath();
+          spotCtx.arc(cx, cy, r, 0, Math.PI * 2);
+          spotCtx.strokeStyle = s.mode === "heal" ? "#4af" : "#f84";
+          spotCtx.lineWidth = 1.5;
+          spotCtx.stroke();
+          // Source circle
+          spotCtx.beginPath();
+          spotCtx.arc(scx, scy, r, 0, Math.PI * 2);
+          spotCtx.strokeStyle = "#888";
+          spotCtx.setLineDash([3, 3]);
+          spotCtx.stroke();
+          spotCtx.setLineDash([]);
+          // Index label
+          spotCtx.fillStyle = s.mode === "heal" ? "#4af" : "#f84";
+          spotCtx.font = "9px sans-serif";
+          spotCtx.fillText(String(i + 1), cx - 3, cy + 3);
+        });
+      }
+
+      function addSpot(e: MouseEvent) {
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        const spot = {
+          x, y,
+          radius: Math.round(Math.min(rect.width, rect.height) * 0.03),
+          mode: spotMode || "clone",
+          srcX: x + 0.05,
+          srcY: y + 0.05,
+        };
+        if (!state.spot_removals) state.spot_removals = [];
+        state.spot_removals.push(spot);
+        currentSpot = spot;
+        isDragging = true;
+        renderSpotOverlay();
+        renderSpotList();
+        scheduleDraw();
+      }
+
+      function renderSpotList() {
+        const list = document.getElementById("spot-list");
+        if (!list) return;
+        list.innerHTML = "";
+        const spots: any[] = state.spot_removals || [];
+        spots.forEach((s, i) => {
+          const div = document.createElement("div");
+          div.style.cssText = "display:flex;gap:4px;align-items:center;padding:2px 4px;background:#1a1a1a;border-radius:3px;font-size:0.7rem";
+          div.innerHTML = "<span style="color:" + (s.mode === "heal" ? "#4af" : "#f84") + ";width:30px">" + s.mode.charAt(0).toUpperCase() + "</span><span style="flex:1">Spot " + (i+1) + " r=" + s.radius + "</span><button data-idx="" + i + "" style="background:none;border:none;color:#888;cursor:pointer">X</button>";
+          div.querySelector("[data-idx]")?.addEventListener("click", (e) => {
+            const idx = parseInt((e.target as HTMLElement).dataset.idx || "0");
+            state.spot_removals.splice(idx, 1);
+            renderSpotOverlay();
+            renderSpotList();
+            scheduleDraw();
+          });
+          list.appendChild(div);
+        });
+      }
+
+      // Canvas mouse events for spot removal
+      if (canvas) {
+        canvas.addEventListener("mousedown", (e) => {
+          if (!spotMode) return;
+          addSpot(e);
+        });
+        canvas.addEventListener("mousemove", (e) => {
+          if (!isDragging || !currentSpot || !canvas) return;
+          const rect = canvas.getBoundingClientRect();
+          currentSpot.srcX = (e.clientX - rect.left) / rect.width;
+          currentSpot.srcY = (e.clientY - rect.top) / rect.height;
+          renderSpotOverlay();
+        });
+        canvas.addEventListener("mouseup", () => {
+          isDragging = false;
+          currentSpot = null;
+        });
+        canvas.addEventListener("mouseleave", () => {
+          isDragging = false;
+          currentSpot = null;
+        });
+      }
+
+      // Spot removal mode buttons
+      const btnClone = document.getElementById("btn-spot-add-clone");
+      const btnHeal = document.getElementById("btn-spot-add-heal");
+      const btnResetSpot = document.getElementById("btn-reset-spot");
+      const spotModeLabel = document.getElementById("spot-mode-label");
+      function setSpotMode(mode: "clone" | "heal" | null) {
+        spotMode = mode;
+        if (btnClone) btnClone.style.fontWeight = mode === "clone" ? "bold" : "";
+        if (btnHeal) btnHeal.style.fontWeight = mode === "heal" ? "bold" : "";
+        if (spotModeLabel) spotModeLabel.textContent = mode ? "Click canvas to add " + mode + " spot" : "Click canvas to add spot";
+      }
+      btnClone?.addEventListener("click", () => setSpotMode(spotMode === "clone" ? null : "clone"));
+      btnHeal?.addEventListener("click", () => setSpotMode(spotMode === "heal" ? null : "heal"));
+      btnResetSpot?.addEventListener("click", () => {
+        state.spot_removals = [];
+        renderSpotOverlay();
+        renderSpotList();
+        scheduleDraw();
+      });
+
+      // Snapshot save button
+      const btnSnapSave = document.getElementById("btn-snapshot-save");
+      btnSnapSave?.addEventListener("click", saveSnapshot);
+      const snapInput = document.getElementById("snapshot-name-input");
+      snapInput?.addEventListener("keydown", (e: KeyboardEvent) => {
+        if (e.key === "Enter") saveSnapshot();
+      });
+
+      // Initial render
+      renderSnapshotList();
+      renderSpotList();
+      if (spotOverlay) {
+        window.addEventListener("resize", renderSpotOverlay);
+      }
 
   // ── Boot ───────────────────────────────────────────────────────────────────
   _cvInit();

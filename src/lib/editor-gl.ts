@@ -81,6 +81,11 @@ uniform float uCropY;
 uniform float uCropW;
 uniform float uCropH;
 
+// ── Chromatic Aberration ──────────────────────────────────────────────
+uniform float uCAStrength;   // 0..100
+uniform float uCAX;          // -1..1
+uniform float uCAY;          // -1..1
+
 // Rotate UV around center by angle in degrees
 vec2 rotateUv(vec2 uv, float angleDeg) {
   float a = angleDeg * 0.01745329251;
@@ -135,7 +140,17 @@ void main() {
     fragColor = vec4(0.0, 0.0, 0.0, 1.0);
     return;
   }
-  vec3 src = texture(uSource, uv).rgb;
+  vec2 caOffset = vec2(0.0);
+  if (uCAStrength > 0.0) {
+    float strength = uCAStrength / 100.0;
+    caOffset = strength * 0.006 * vec2(uCAX, uCAY);
+  }
+  vec2 uvR = clamp(uv + caOffset, 0.0, 1.0);
+  vec2 uvB = clamp(uv - caOffset, 0.0, 1.0);
+  float r = texture(uSource, uvR).r;
+  float g = texture(uSource, uv).g;
+  float b = texture(uSource, uvB).b;
+  vec3 src = vec3(r, g, b);
   vec3 adjusted = applySliders(src);
   // Sample 3D LUT. Clamp to ensure 0..1 even after slider overshoot,
   // since LUT cube indices are 0..size-1.
@@ -444,6 +459,42 @@ void main() {
 }
 `;
 
+
+// ─── Calibration (Camera Profile) ─────────────────────────────────────
+// Final pass: applies shadow tint hue shift + global saturation boost.
+const CALIBRATION_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform float uShadowTint;  // -100..+100 (0=neutral)
+uniform float uCalSat;      // 0..100 extra saturation
+
+void main() {
+  vec3 c = texture(uSource, vUv).rgb;
+
+  // Shadow tint: shift hue in shadows only
+  if (abs(uShadowTint) > 0.1) {
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    float shadowMask = 1.0 - smoothstep(0.0, 0.4, luma);
+    float amount = uShadowTint / 100.0 * shadowMask * 0.5;
+    c.r += amount * 0.5;
+    c.g -= amount * 0.3;
+    c.b += amount * 0.5;
+  }
+
+  // Calibration saturation
+  if (uCalSat > 0.0) {
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    float satFactor = 1.0 + uCalSat / 100.0;
+    c = mix(vec3(luma), c, satFactor);
+  }
+
+  fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+`;
+
 // ─── Main pipeline ────────────────────────────────────────────────────
 
 export interface CurvePoint { 0: number; 1: number; }
@@ -501,6 +552,19 @@ export interface WebGLPipelineState {
   grain?: GrainData;
   /** Dehaze (-100 to +100). */
   dehaze?: number;
+  /** Lens corrections. */
+  lens_corrections?: {
+    enabled?: boolean;
+    remove_baseline_exposure?: number;  // -5..+5
+    chromatic_aberration?: number;        // 0..100
+    chromatic_aberration_x?: number;      // -1..1
+    chromatic_aberration_y?: number;       // -1..1
+  };
+  /** Calibration (Camera Profile). */
+  calibration?: {
+    shadow_tint?: number;   // -100..+100
+    saturation?: number;    // 0..100
+  };
 }
 
 export interface WebGLPipeline {
@@ -541,6 +605,10 @@ export interface WebGLPipeline {
   let hslTex: WebGLTexture | null = null;
   // True when all HSL values are zero — skips the hsl pass.
   let hslIsFlat = true;
+
+  // Calibration (Camera Profile) program
+  let calibProg: WebGLProgram | null = null;
+  let calibIsFlat = true;
 
   // Pre-built identity LUT: lut[i] = i/255.
   const _identityLut = new Float32Array(256);
@@ -821,6 +889,7 @@ export function createWebGLPipeline(): WebGLPipeline {
       unsharpProg = createProgram(VERT_SRC, UNSHARP_FRAG);
       curveProg = createProgram(VERT_SRC, CURVE_FRAG);
       hslProg = createProgram(VERT_SRC, HSL_FRAG);
+      calibProg = createProgram(VERT_SRC, CALIBRATION_FRAG);
 
       setupQuad();
       ready = true;
@@ -1017,6 +1086,10 @@ export function createWebGLPipeline(): WebGLPipeline {
       gl.uniform1f(gl.getUniformLocation(p, 'uCropY'), lastState.cropY || 0);
       gl.uniform1f(gl.getUniformLocation(p, 'uCropW'), lastState.cropW || 0);
       gl.uniform1f(gl.getUniformLocation(p, 'uCropH'), lastState.cropH || 0);
+      const lc = lastState.lens_corrections || {};
+      gl.uniform1f(gl.getUniformLocation(p, 'uCAStrength'), lc.chromatic_aberration || 0);
+      gl.uniform1f(gl.getUniformLocation(p, 'uCAX'), lc.chromatic_aberration_x || 0);
+      gl.uniform1f(gl.getUniformLocation(p, 'uCAY'), lc.chromatic_aberration_y || 0);
     }, null, w, h);
 
     // ── Pass 2: curve → canvas ─────────────────────────────────────────────
@@ -1122,6 +1195,25 @@ export function createWebGLPipeline(): WebGLPipeline {
       }, null, w, h);
     }
 
+    // ── Pass: Calibration (Camera Profile) → canvas ─────────────────────
+    {
+      const calib = lastState.calibration || {};
+      const shadowTint = calib.shadow_tint || 0;
+      const calSat = calib.saturation || 0;
+      calibIsFlat = shadowTint === 0 && calSat === 0;
+      if (!calibIsFlat && calibProg) {
+        gl.activeTexture(gl.TEXTURE0);
+        // Source: whatever is currently on canvas (from HSL pass)
+        gl.bindTexture(gl.TEXTURE_2D, hslTex || curveTex || sourceTex);
+        runPass(calibProg, () => {
+          const p = calibProg!;
+          gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uShadowTint'), shadowTint);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCalSat'), calSat);
+        }, null, w, h);
+      }
+    }
+
     gl.bindVertexArray(null);
   }
 
@@ -1147,10 +1239,12 @@ export function createWebGLPipeline(): WebGLPipeline {
     if (unsharpProg) gl.deleteProgram(unsharpProg);
     if (curveProg) gl.deleteProgram(curveProg);
     if (hslProg) gl.deleteProgram(hslProg);
+    if (calibProg) gl.deleteProgram(calibProg);
     quadVao = sourceTex = lutTex = sharpenTexA = sharpenTexB = curveTex = hslTex = null;
     sharpenFboA = sharpenFboB = curveFbo = hslFbo = null;
     curveTexR = curveTexG = curveTexB = null;
     slidersLutProg = blurHProg = blurVProg = unsharpProg = curveProg = hslProg = null;
+    calibIsFlat = true; calibProg = null;
     ready = false;
   }
 

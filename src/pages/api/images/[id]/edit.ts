@@ -231,7 +231,27 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
 
   const stNeedsProcessing = !isSplitToningFlat(splitToningParams);
   const grainNeedsProcessing = !isGrainFlat(grainParams);
-  const needsPixelLoop = hslNeedsProcessing || cgNeedsProcessing || stNeedsProcessing || grainNeedsProcessing || dehazeVal !== 0;
+
+  // Lens corrections (baseline exposure + CA)
+  const lensCorrectionsParams: LensCorrectionsData = params.lens_corrections || {};
+  const needsLensCorrectionsPipeline = !isLensCorrectionsFlat(lensCorrectionsParams);
+
+  // Calibration (shadow tint + saturation)
+  const calibrationParams: CalibrationData = params.calibration || {};
+  const calNeedsProcessing = !isCalibrationFlat(calibrationParams);
+
+  // Spot removals (applied after everything)
+  const spotRemovals: SpotRemoval[] = params.spot_removals || [];
+
+  const needsPixelLoop = hslNeedsProcessing || cgNeedsProcessing || stNeedsProcessing || grainNeedsProcessing || dehazeVal !== 0 || calNeedsProcessing;
+
+  // Apply lens corrections (baseline exposure + CA) before pixel loop
+  if (needsLensCorrectionsPipeline) {
+    const cropMeta = await pipeline.metadata();
+    const lcW = cropMeta.width || 1;
+    const lcH = cropMeta.height || 1;
+    pipeline = await applyLensCorrectionsPipeline(pipeline, lensCorrectionsParams, lcW, lcH);
+  }
 
   if (needsPixelLoop) {
     const rgba = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -262,8 +282,17 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
       if (grainNeedsProcessing) {
         [r, g, b] = applyGrainToRgb(r, g, b, grainParams, x, y, timeMs);
       }
+      if (calNeedsProcessing) {
+        [r, g, b] = applyCalibrationToRgb(r, g, b, calibrationParams);
+      }
       data[base] = r; data[base + 1] = g; data[base + 2] = b;
     }
+
+    // Apply spot removals after all other pixel processing
+    if (spotRemovals.length > 0) {
+      applySpotRemovalsToBuffer(data, info.width, info.height, spotRemovals);
+    }
+
     pipeline = sharp(data, {
       raw: { width: info.width, height: info.height, channels: 4 },
     });

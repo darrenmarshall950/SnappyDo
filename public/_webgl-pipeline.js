@@ -30,6 +30,11 @@ uniform float uCropY;
 uniform float uCropW;
 uniform float uCropH;
 
+// \u2500\u2500 Chromatic Aberration \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+uniform float uCAStrength;   // 0..100
+uniform float uCAX;          // -1..1
+uniform float uCAY;          // -1..1
+
 // Rotate UV around center by angle in degrees
 vec2 rotateUv(vec2 uv, float angleDeg) {
   float a = angleDeg * 0.01745329251;
@@ -84,7 +89,17 @@ void main() {
     fragColor = vec4(0.0, 0.0, 0.0, 1.0);
     return;
   }
-  vec3 src = texture(uSource, uv).rgb;
+  vec2 caOffset = vec2(0.0);
+  if (uCAStrength > 0.0) {
+    float strength = uCAStrength / 100.0;
+    caOffset = strength * 0.006 * vec2(uCAX, uCAY);
+  }
+  vec2 uvR = clamp(uv + caOffset, 0.0, 1.0);
+  vec2 uvB = clamp(uv - caOffset, 0.0, 1.0);
+  float r = texture(uSource, uvR).r;
+  float g = texture(uSource, uv).g;
+  float b = texture(uSource, uvB).b;
+  vec3 src = vec3(r, g, b);
   vec3 adjusted = applySliders(src);
   // Sample 3D LUT. Clamp to ensure 0..1 even after slider overshoot,
   // since LUT cube indices are 0..size-1.
@@ -375,6 +390,38 @@ void main() {
   fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }
 `;
+const CALIBRATION_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform float uShadowTint;  // -100..+100 (0=neutral)
+uniform float uCalSat;      // 0..100 extra saturation
+
+void main() {
+  vec3 c = texture(uSource, vUv).rgb;
+
+  // Shadow tint: shift hue in shadows only
+  if (abs(uShadowTint) > 0.1) {
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    float shadowMask = 1.0 - smoothstep(0.0, 0.4, luma);
+    float amount = uShadowTint / 100.0 * shadowMask * 0.5;
+    c.r += amount * 0.5;
+    c.g -= amount * 0.3;
+    c.b += amount * 0.5;
+  }
+
+  // Calibration saturation
+  if (uCalSat > 0.0) {
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    float satFactor = 1.0 + uCalSat / 100.0;
+    c = mix(vec3(luma), c, satFactor);
+  }
+
+  fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+`;
 let curveTexR = null;
 let curveTexG = null;
 let curveTexB = null;
@@ -385,6 +432,8 @@ let hslProg = null;
 let hslFbo = null;
 let hslTex = null;
 let hslIsFlat = true;
+let calibProg = null;
+let calibIsFlat = true;
 const _identityLut = new Float32Array(256);
 for (let i = 0; i < 256; i++) _identityLut[i] = i / 255;
 function _buildLut(ch) {
@@ -655,6 +704,7 @@ function createWebGLPipeline() {
       unsharpProg = createProgram(VERT_SRC, UNSHARP_FRAG);
       curveProg = createProgram(VERT_SRC, CURVE_FRAG);
       hslProg = createProgram(VERT_SRC, HSL_FRAG);
+      calibProg = createProgram(VERT_SRC, CALIBRATION_FRAG);
       setupQuad();
       ready2 = true;
       return true;
@@ -827,6 +877,10 @@ function createWebGLPipeline() {
       gl2.uniform1f(gl2.getUniformLocation(p, "uCropY"), lastState2.cropY || 0);
       gl2.uniform1f(gl2.getUniformLocation(p, "uCropW"), lastState2.cropW || 0);
       gl2.uniform1f(gl2.getUniformLocation(p, "uCropH"), lastState2.cropH || 0);
+      const lc = lastState2.lens_corrections || {};
+      gl2.uniform1f(gl2.getUniformLocation(p, "uCAStrength"), lc.chromatic_aberration || 0);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uCAX"), lc.chromatic_aberration_x || 0);
+      gl2.uniform1f(gl2.getUniformLocation(p, "uCAY"), lc.chromatic_aberration_y || 0);
     }, null, w, h);
     gl2.bindFramebuffer(gl2.FRAMEBUFFER, null);
     gl2.viewport(0, 0, w, h);
@@ -913,6 +967,22 @@ function createWebGLPipeline() {
         gl2.uniform1f(gl2.getUniformLocation(p, "uTime"), performance.now() / 1e3);
       }, null, w, h);
     }
+    {
+      const calib = lastState2.calibration || {};
+      const shadowTint = calib.shadow_tint || 0;
+      const calSat = calib.saturation || 0;
+      calibIsFlat = shadowTint === 0 && calSat === 0;
+      if (!calibIsFlat && calibProg) {
+        gl2.activeTexture(gl2.TEXTURE0);
+        gl2.bindTexture(gl2.TEXTURE_2D, hslTex || curveTex || sourceTex);
+        runPass(calibProg, () => {
+          const p = calibProg;
+          gl2.uniform1i(gl2.getUniformLocation(p, "uSource"), 0);
+          gl2.uniform1f(gl2.getUniformLocation(p, "uShadowTint"), shadowTint);
+          gl2.uniform1f(gl2.getUniformLocation(p, "uCalSat"), calSat);
+        }, null, w, h);
+      }
+    }
     gl2.bindVertexArray(null);
   }
   function destroy() {
@@ -937,10 +1007,13 @@ function createWebGLPipeline() {
     if (unsharpProg) gl2.deleteProgram(unsharpProg);
     if (curveProg) gl2.deleteProgram(curveProg);
     if (hslProg) gl2.deleteProgram(hslProg);
+    if (calibProg) gl2.deleteProgram(calibProg);
     quadVao = sourceTex = lutTex = sharpenTexA = sharpenTexB = curveTex = hslTex = null;
     sharpenFboA = sharpenFboB = curveFbo = hslFbo = null;
     curveTexR = curveTexG = curveTexB = null;
     slidersLutProg = blurHProg = blurVProg = unsharpProg = curveProg = hslProg = null;
+    calibIsFlat = true;
+    calibProg = null;
     ready2 = false;
   }
   return {
