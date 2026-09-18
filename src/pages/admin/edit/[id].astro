@@ -647,6 +647,18 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
     }
     .btn--save-lut:hover:not(:disabled) { background: #fff; border-color: #fff; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(255,255,255,0.18); }
     .btn--save-lut:disabled { opacity: 0.55; cursor: wait; }
+    .btn--delete-lut {
+      background: transparent;
+      color: #f87171;
+      border: 1px solid #7f1d1d;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .btn--delete-lut:hover:not(:disabled) { background: #7f1d1d; color: #fff; border-color: #ef4444; }
+    .btn--delete-lut:disabled { opacity: 0.55; cursor: not-allowed; }
     .lut-saved-flag { color: #86efac; font-size: 0.78rem; font-weight: 600; opacity: 0; transition: opacity 0.2s; margin-left: 4px; }
     .lut-saved-flag.visible { opacity: 1; }
       .select {
@@ -867,6 +879,7 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           </select>
           <div class="lut-actions">
             <button class="btn btn--save-lut" id="btn-save-lut" type="button" title="Bake current sliders + LUT into a new LUT you can reload later">Save LUT</button>
+            <button class="btn btn--delete-lut" id="btn-delete-lut" type="button" title="Delete the currently selected saved LUT (built-ins are protected)" style="display:none">Delete</button>
             <span class="lut-saved-flag" id="lut-saved-flag" style="display:none">Saved!</span>
           </div>
           <div class="slider" data-key="lut_intensity" id="slider-lut-intensity">

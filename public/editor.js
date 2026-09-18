@@ -1297,9 +1297,22 @@
     }
     return cached;
   }
+  function updateDeleteLutButton() {
+    const btn = document.getElementById("btn-delete-lut");
+    if (!btn) return;
+    const sel = document.getElementById("lut-select");
+    const v = sel ? sel.value : "";
+    if (!v) {
+      btn.style.display = "none";
+      return;
+    }
+    const meta = (window.__snappydoLuts || []).find((x) => String(x.id) === String(v));
+    btn.style.display = meta && meta.kind === "synthesised" ? "inline-flex" : "none";
+  }
   var lutSelect = document.getElementById("lut-select");
   if (lutSelect) {
     lutSelect.addEventListener("change", async () => {
+      updateDeleteLutButton();
       const v = lutSelect.value;
       state.lut_id = v ? Number(v) : 0;
       if (state.lut_id) {
@@ -1346,6 +1359,42 @@
     setStatus("LUT sliders restored.");
   }
   var btnSaveLut = document.getElementById("btn-save-lut");
+  var btnDeleteLut = document.getElementById("btn-delete-lut");
+  if (btnDeleteLut) {
+    btnDeleteLut.addEventListener("click", async () => {
+      const sel = document.getElementById("lut-select");
+      if (!sel || !sel.value) return;
+      const meta = (window.__snappydoLuts || []).find((x) => String(x.id) === String(sel.value));
+      if (!meta || meta.kind !== "synthesised") return;
+      if (!confirm('Delete "' + meta.name + '"? This cannot be undone.')) return;
+      btnDeleteLut.disabled = true;
+      const originalText = btnDeleteLut.textContent;
+      btnDeleteLut.textContent = "Deleting\u2026";
+      try {
+        const res = await fetch("/api/luts/" + meta.id, {
+          method: "DELETE",
+          credentials: "same-origin"
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: "delete failed" }));
+          setStatus("Delete LUT failed: " + (err.error || res.status), true);
+          return;
+        }
+        await loadLuts();
+        sel.value = "";
+        state.lut_id = 0;
+        activeLut = null;
+        updateDeleteLutButton();
+        draw();
+        setStatus('Deleted "' + meta.name + '".');
+      } catch (e) {
+        setStatus("Delete LUT error: " + (e?.message || String(e)), true);
+      } finally {
+        btnDeleteLut.disabled = false;
+        btnDeleteLut.textContent = originalText;
+      }
+    });
+  }
   if (btnSaveLut) {
     btnSaveLut.addEventListener("click", async () => {
       const defaultName = state.lut_id ? (window.__snappydoLuts || []).find((x) => Number(x.id) === state.lut_id)?.name || "My LUT" : "My LUT";
@@ -1382,6 +1431,7 @@
           lutSelect.value = String(json.lut.id);
           state.lut_id = json.lut.id;
           activeLut = await fetchLutData(json.lut.id);
+          updateDeleteLutButton();
           draw();
         }
         const flag = document.getElementById("lut-saved-flag");

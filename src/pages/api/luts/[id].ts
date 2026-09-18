@@ -32,3 +32,34 @@ export const GET: APIRoute = async ({ params }) => {
     data: Array.from(data),
   });
 };
+
+// DELETE /api/luts/:id — remove a LUT (admin only).
+// Built-in LUTs are protected (lib.deleteLut returns false). Uploaded and
+// user-saved (synthesised) LUTs can be deleted; returns 204 on success.
+import { readAdminSession } from '../../../lib/auth';
+import { deleteLut as deleteLutRow } from '../../../lib/luts';
+
+function unauthorized() { return json({ error: 'Unauthorized' }, 401); }
+function notFound() { return json({ error: 'LUT not found' }, 404); }
+function forbidden() { return json({ error: 'Cannot delete a built-in LUT' }, 403); }
+
+export const DELETE: APIRoute = async ({ request, params }) => {
+  const session = readAdminSession(request);
+  if (!session) return unauthorized();
+  const id = Number(params.id);
+  if (!Number.isFinite(id) || id <= 0) return json({ error: 'invalid id' }, 400);
+  try {
+    const ok = deleteLutRow(id);
+    if (ok === false) {
+      // lib returns false for built-ins or missing rows. Distinguish via a quick lookup.
+      const { getLutById } = await import('../../../lib/luts');
+      const row = getLutById(id);
+      if (!row) return notFound();
+      if (row.kind === 'builtin') return forbidden();
+      return notFound();
+    }
+    return new Response(null, { status: 204 });
+  } catch (e: any) {
+    return json({ error: 'Delete failed: ' + (e?.message ?? String(e)) }, 500);
+  }
+};
