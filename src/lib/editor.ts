@@ -1807,9 +1807,8 @@ webglPipeline.render();
         // Reset tone curve shape (channel points + active channel)
         if (typeof (window as any)._cvReset === 'function') (window as any)._cvReset();
         // Reset effects (dehaze, split toning, grain), CG colours, HSL
-        resetKeys(['dehaze','st_shadows_hue','st_shadows_saturation',
-                   'st_highlights_hue','st_highlights_saturation','st_balance',
-                   'grain_amount','grain_size']);
+        resetKeys(['dehaze','st_balance','grain_amount','grain_size']);
+        resetStWheels();  // Resets ST state + wheel pointers
         resetCgKeys();
         draw();
       };
@@ -1820,11 +1819,70 @@ webglPipeline.render();
       document.getElementById('btn-reset-tone').onclick = () => resetKeys(['highlights','shadows','whites','blacks']);
       document.getElementById('btn-reset-color').onclick = () => resetKeys(['saturation','temp','tint']);
       document.getElementById('btn-reset-fx').onclick = () => {
-  resetKeys(['sharpen','vignette','dehaze','st_shadows_hue','st_shadows_saturation',
-             'st_highlights_hue','st_highlights_saturation','st_balance',
-             'grain_amount','grain_size']);
+  resetKeys(['sharpen','vignette','dehaze','st_balance','grain_amount','grain_size']);
+  resetStWheels();
   resetCgKeys();
 };
+      // Wire the Color Grading section reset button (resets CG colours + HSL)
+      const btnResetCg = document.getElementById('btn-reset-cg');
+      if (btnResetCg) btnResetCg.onclick = () => resetCgKeys();
+      // Wire any per-section reset buttons for Split Toning + HSL if present
+      const btnResetSt = document.getElementById('btn-reset-st');
+      if (btnResetSt) btnResetSt.onclick = () => { resetKeys(['st_balance']); resetStWheels(); };
+      const btnResetHsl = document.getElementById('btn-reset-hsl');
+      if (btnResetHsl) btnResetHsl.onclick = () => resetCgKeys(); // resets HSL too
+
+      // Add small × reset button on every colour wheel for individual reset
+      document.querySelectorAll('.cw').forEach((wheel: any) => {
+        if (wheel.querySelector('.cw-reset-btn')) return;
+        const btn = document.createElement('button');
+        btn.className = 'cw-reset-btn';
+        btn.textContent = '×';
+        btn.title = 'Reset colour';
+        wheel.appendChild(btn);
+        btn.addEventListener('click', (e: MouseEvent) => {
+          e.stopPropagation();
+          e.preventDefault();
+          // Move pointer to centre
+          const pointer = wheel.querySelector('.cw-pointer') as SVGCircleElement | null;
+          if (pointer) { pointer.setAttribute('cx', '0'); pointer.setAttribute('cy', '0'); }
+          // Clear state based on the wheel's data attrs
+          const stateKey = wheel.dataset.stateKey;
+          const stHue = wheel.dataset.stHue;
+          const stSat = wheel.dataset.stSat;
+          const hslRange = wheel.dataset.hslRange;
+          if (stateKey) {
+            (window as any).state[stateKey] = [128, 128, 128];
+          }
+          if (stHue && stSat) {
+            (window as any).state[stHue] = 0;
+            (window as any).state[stSat] = 0;
+            const wrap1 = document.querySelector('.slider[data-key="' + stHue + '"]');
+            if (wrap1) {
+              const sl = wrap1.querySelector('input'); if (sl) sl.value = '0';
+              const val = wrap1.querySelector('.val'); if (val) val.textContent = '0';
+            }
+            const wrap2 = document.querySelector('.slider[data-key="' + stSat + '"]');
+            if (wrap2) {
+              const sl = wrap2.querySelector('input'); if (sl) sl.value = '0';
+              const val = wrap2.querySelector('.val'); if (val) val.textContent = '0';
+            }
+          }
+          if (hslRange) {
+            (window as any).state['hsl_' + hslRange] = { h: 0, s: 0, l: 0 };
+          }
+          if (typeof scheduleDraw === 'function') scheduleDraw();
+          else if (typeof draw === 'function') draw();
+        });
+      });
+
+      // Reset a colour wheel pointer to centre (neutral)
+      function resetWheelPointer(elId: string) {
+        const el = document.getElementById(elId);
+        if (!el) return;
+        const pointer = el.querySelector('.cw-pointer') as SVGCircleElement | null;
+        if (pointer) { pointer.setAttribute('cx', '0'); pointer.setAttribute('cy', '0'); }
+      }
 
       function resetCgKeys() {
         const RANGES = ['red','orange','yellow','green','aqua','blue','purple','magenta'];
@@ -1835,21 +1893,24 @@ webglPipeline.render();
             row.querySelectorAll('.cg-hsl-slider').forEach((sl: any) => { sl.value = '0'; });
             row.querySelectorAll('.cg-hsl-val').forEach((sp: any) => { sp.textContent = '0'; });
           }
+          // Reset HSL wheel pointer
+          resetWheelPointer('cw-hsl-' + range);
         }
-        state.cg_shadows_colour = [0, 0, 0];
-        state.cg_midtones_colour = [0, 0, 0];
-        state.cg_highlights_colour = [0, 0, 0];
-        state.cg_global_colour = [0, 0, 0];
+        // Reset CG colours to gray (neutral — black would mean a colour tint)
+        state.cg_shadows_colour = [128, 128, 128];
+        state.cg_midtones_colour = [128, 128, 128];
+        state.cg_highlights_colour = [128, 128, 128];
+        state.cg_global_colour = [128, 128, 128];
         state.cg_shadows_intensity = 0;
         state.cg_midtones_intensity = 0;
         state.cg_highlights_intensity = 0;
         state.cg_global_intensity = 0;
         state.cg_mode = 'saturation';
-        // Reset UI
-        ['cg-shadows-colour','cg-midtones-colour','cg-highlights-colour','cg-global-colour'].forEach((id, i) => {
-          const el = document.getElementById(id) as HTMLInputElement;
-          if (el) el.value = "#808080";
-        });
+        // Reset CG wheel pointers to centre
+        resetWheelPointer('cw-cg-shadows-colour');
+        resetWheelPointer('cw-cg-midtones-colour');
+        resetWheelPointer('cw-cg-highlights-colour');
+        resetWheelPointer('cw-cg-global-colour');
         const modeSel = document.getElementById('cg-mode-select') as HTMLSelectElement;
         if (modeSel) modeSel.value = 'saturation';
         ['cg_shadows_intensity','cg_midtones_intensity','cg_highlights_intensity','cg_global_intensity'].forEach((k) => {
@@ -1859,6 +1920,21 @@ webglPipeline.render();
         });
         if (typeof drawWebGL === 'function') drawWebGL();
         if (typeof draw === 'function') draw();
+      }
+
+      function resetStWheels() {
+        // Reset Split Toning wheels + their underlying state
+        state.st_shadows_hue = 0;
+        state.st_shadows_saturation = 0;
+        state.st_highlights_hue = 0;
+        state.st_highlights_saturation = 0;
+        resetWheelPointer('cw-st-shadows');
+        resetWheelPointer('cw-st-highlights');
+        ['st_shadows_hue','st_shadows_saturation','st_highlights_hue','st_highlights_saturation'].forEach((k) => {
+          const sl = document.querySelector('[data-key="' + k + '"] input[type="range"]') as HTMLInputElement;
+          const val = document.querySelector('[data-key="' + k + '"] .val');
+          if (sl) { sl.value = '0'; if (val) val.textContent = '0'; }
+        });
       }
 
       // Wire HSL sliders
