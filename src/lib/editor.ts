@@ -1548,20 +1548,37 @@ webglPipeline.render();
         } catch (e) { console.warn('loadPresets failed', e); }
       }
 
+      // Sort LUTs so the 5 built-ins sit at the top of the dropdown,
+      // then uploaded, then user-saved/synthesised (alphabetical within each).
+      function sortLutsForDisplay(luts: any[]): any[] {
+        const rank: Record<string, number> = { builtin: 0, uploaded: 1, synthesised: 2 };
+        return [...luts].sort((a, b) => {
+          const ra = rank[a.kind] ?? 9;
+          const rb = rank[b.kind] ?? 9;
+          if (ra !== rb) return ra - rb;
+          return String(a.name).localeCompare(String(b.name));
+        });
+      }
+
       async function loadLuts() {
         try {
           const res = await fetch('/api/luts');
           if (!res.ok) return;
           const { luts } = await res.json();
+          const sorted = sortLutsForDisplay(luts || []);
           const sel = document.getElementById('lut-select');
           if (!sel) return;
           sel.innerHTML = '<option value="">No LUT</option>';
-          for (const l of luts) {
+          for (const l of sorted) {
             const opt = document.createElement('option');
             opt.value = String(l.id);
-            opt.textContent = (l.kind === 'builtin' ? '★ ' : '') + l.name;
+            let prefix = '';
+            if (l.kind === 'builtin') prefix = '★ ';
+            else if (l.kind === 'synthesised') prefix = '✦ ';
+            opt.textContent = prefix + l.name;
             sel.appendChild(opt);
           }
+          // Keep the un-sorted list on window so applySynthParams can find any LUT by id
           window.__snappydoLuts = luts;
         } catch (e) { console.warn('loadLuts failed', e); }
       }

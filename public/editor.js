@@ -1246,18 +1246,31 @@
       console.warn("loadPresets failed", e);
     }
   }
+  function sortLutsForDisplay(luts) {
+    const rank = { builtin: 0, uploaded: 1, synthesised: 2 };
+    return [...luts].sort((a, b) => {
+      const ra = rank[a.kind] ?? 9;
+      const rb = rank[b.kind] ?? 9;
+      if (ra !== rb) return ra - rb;
+      return String(a.name).localeCompare(String(b.name));
+    });
+  }
   async function loadLuts() {
     try {
       const res = await fetch("/api/luts");
       if (!res.ok) return;
       const { luts } = await res.json();
+      const sorted = sortLutsForDisplay(luts || []);
       const sel = document.getElementById("lut-select");
       if (!sel) return;
       sel.innerHTML = '<option value="">No LUT</option>';
-      for (const l of luts) {
+      for (const l of sorted) {
         const opt = document.createElement("option");
         opt.value = String(l.id);
-        opt.textContent = (l.kind === "builtin" ? "\u2605 " : "") + l.name;
+        let prefix = "";
+        if (l.kind === "builtin") prefix = "\u2605 ";
+        else if (l.kind === "synthesised") prefix = "\u2726 ";
+        opt.textContent = prefix + l.name;
         sel.appendChild(opt);
       }
       window.__snappydoLuts = luts;
@@ -1299,6 +1312,10 @@
         }
         try {
           activeLut = await fetchLutData(state.lut_id);
+          const meta = (window.__snappydoLuts || []).find((x) => Number(x.id) === state.lut_id);
+          if (meta && meta.synth_params) {
+            applySynthParams(meta.synth_params);
+          }
         } catch (e) {
           setStatus("Failed to load LUT.", true);
           state.lut_id = 0;
@@ -1309,6 +1326,78 @@
         activeLut = null;
       }
       draw();
+    });
+  }
+  function applySynthParams(params) {
+    if (!params || typeof params !== "object") return;
+    const LOOK_KEYS = ["exposure", "brightness", "contrast", "saturation", "temp", "tint"];
+    for (const k of LOOK_KEYS) {
+      if (typeof params[k] === "number" && Number.isFinite(params[k])) {
+        state[k] = params[k];
+        const wrap = document.querySelector('.slider[data-key="' + k + '"]');
+        if (wrap) {
+          const inp = wrap.querySelector("input");
+          const val = wrap.querySelector(".val");
+          if (inp) inp.value = String(params[k]);
+          if (val) val.textContent = String(params[k]);
+        }
+      }
+    }
+    setStatus("LUT sliders restored.");
+  }
+  var btnSaveLut = document.getElementById("btn-save-lut");
+  if (btnSaveLut) {
+    btnSaveLut.addEventListener("click", async () => {
+      const defaultName = state.lut_id ? (window.__snappydoLuts || []).find((x) => Number(x.id) === state.lut_id)?.name || "My LUT" : "My LUT";
+      const name = prompt("Name for the new LUT:", defaultName + " (edited)");
+      if (!name || !name.trim()) return;
+      const LOOK_KEYS = ["exposure", "brightness", "contrast", "saturation", "temp", "tint"];
+      const params = {};
+      for (const k of LOOK_KEYS) {
+        if (typeof state[k] === "number") {
+          params[k] = state[k];
+        }
+      }
+      btnSaveLut.disabled = true;
+      const originalText = btnSaveLut.textContent;
+      btnSaveLut.textContent = "Saving\u2026";
+      try {
+        const res = await fetch("/api/luts/synth", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: name.trim(),
+            params,
+            base_lut_id: state.lut_id || null
+          })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: "save failed" }));
+          setStatus("Save LUT failed: " + (err.error || res.status), true);
+          return;
+        }
+        const json = await res.json();
+        await loadLuts();
+        if (json.lut && json.lut.id) {
+          lutSelect.value = String(json.lut.id);
+          state.lut_id = json.lut.id;
+          activeLut = await fetchLutData(json.lut.id);
+          draw();
+        }
+        const flag = document.getElementById("lut-saved-flag");
+        if (flag) {
+          flag.textContent = "Saved!";
+          flag.style.display = "inline";
+          setTimeout(() => {
+            flag.style.display = "none";
+          }, 2e3);
+        }
+      } catch (e) {
+        setStatus("Save LUT error: " + (e?.message || String(e)), true);
+      } finally {
+        btnSaveLut.disabled = false;
+        btnSaveLut.textContent = originalText;
+      }
     });
   }
   var presetSelect = document.getElementById("preset-select");
