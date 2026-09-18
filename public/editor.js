@@ -1039,6 +1039,9 @@
     }
   }
   var isRawAtRuntime = document.getElementById("section-raw") !== null;
+  if (isRawAtRuntime) {
+    document.querySelectorAll(".color-wb").forEach((el) => el.style.display = "none");
+  }
   function resetAllStateAndUi() {
     for (const k of SLIDER_KEYS) state[k] = 0;
     state.crop = null;

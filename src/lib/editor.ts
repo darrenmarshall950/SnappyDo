@@ -1297,6 +1297,12 @@ webglPipeline.render();
         }
       }
       const isRawAtRuntime = document.getElementById('section-raw') !== null;
+      // On RAW images the Color section's Temp/Tint sliders are overridden by
+      // the RAW WB controls (raw_wb_kelvin/raw_wb_tint). Hide them so the user
+      // is not confused by sliders that appear to do nothing.
+      if (isRawAtRuntime) {
+        document.querySelectorAll('.color-wb').forEach((el) => ((el as HTMLElement).style.display = 'none'));
+      }
       function resetAllStateAndUi() {
         for (const k of SLIDER_KEYS) state[k] = 0;
         state.crop = null;
