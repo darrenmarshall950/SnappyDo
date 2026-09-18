@@ -1730,13 +1730,33 @@
       if (opts.hslRange) {
         const key = "hsl_" + opts.hslRange;
         const cur = state[key] || { h: 0, s: 0, l: 0 };
-        state[key] = { ...cur, h: hue, s: sat * (r > 0 ? 1 : 0) };
+        const HSL_RANGES = {
+          red: 0,
+          orange: 30,
+          yellow: 60,
+          green: 120,
+          aqua: 180,
+          blue: 240,
+          purple: 270,
+          magenta: 300
+        };
+        const centre = HSL_RANGES[opts.hslRange] ?? 0;
+        let delta = hue - centre;
+        if (delta > 180) delta -= 360;
+        if (delta < -180) delta += 360;
+        const sliderH = Math.max(-100, Math.min(100, delta / 1.8));
+        const sliderS = r * 100;
+        state[key] = { h: sliderH, s: sliderS, l: cur.l ?? 0 };
         const row = document.querySelector('.cg-hsl-row[data-range="' + opts.hslRange + '"]');
         if (row) {
           const hSpan = row.querySelector(".cg-hsl-val.h");
           const sSpan = row.querySelector(".cg-hsl-val.s");
-          if (hSpan) hSpan.textContent = String(Math.round(hue));
-          if (sSpan) sSpan.textContent = String(Math.round(sat));
+          if (hSpan) hSpan.textContent = String(Math.round(sliderH));
+          if (sSpan) sSpan.textContent = String(Math.round(sliderS));
+          const hInput = row.querySelector('input[data-channel="h"]');
+          const sInput = row.querySelector('input[data-channel="s"]');
+          if (hInput) hInput.value = String(Math.round(sliderH));
+          if (sInput) sInput.value = String(Math.round(sliderS));
         }
       }
       updatePointer(hue, r);
@@ -1754,8 +1774,22 @@
         sat = (state[opts.stSatKey] ?? 0) / 100;
       } else if (opts.hslRange) {
         const k = state["hsl_" + opts.hslRange] || { h: 0, s: 0 };
-        hue = k.h ?? 0;
-        sat = (k.s ?? 0) / 100;
+        const HSL_RANGES = {
+          red: 0,
+          orange: 30,
+          yellow: 60,
+          green: 120,
+          aqua: 180,
+          blue: 240,
+          purple: 270,
+          magenta: 300
+        };
+        const centre = HSL_RANGES[opts.hslRange] ?? 0;
+        const sliderH = k.h ?? 0;
+        const sliderS = k.s ?? 0;
+        const angle = (centre + sliderH * 1.8 + 360) % 360;
+        sat = sliderS / 100;
+        hue = angle;
       }
       updatePointer(hue, sat);
     }

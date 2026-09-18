@@ -745,22 +745,24 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
       fill: #fff; stroke: #000; stroke-width: 1.25;
       pointer-events: none;
     }
-    .cw-reset-btn {
+    :global(.cw-reset-btn) {
       position: absolute;
-      top: -4px; right: -4px;
-      width: 18px; height: 18px;
+      bottom: 6px; left: 50%;
+      transform: translateX(-50%);
+      width: 22px; height: 22px;
       border-radius: 50%;
-      background: #222;
-      border: 1px solid #444;
-      color: #aaa;
-      font-size: 14px;
+      background: rgba(20, 20, 20, 0.92);
+      border: 1.5px solid #666;
+      color: #ddd;
+      font-size: 16px;
       line-height: 1;
       cursor: pointer;
       padding: 0;
       z-index: 5;
       transition: all 0.15s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.6);
     }
-    .cw-reset-btn:hover { background: #c33; color: #fff; border-color: #f55; }
+    :global(.cw-reset-btn:hover) { background: #c33; color: #fff; border-color: #f55; transform: translateX(-50%) scale(1.15); }
     .cw-compass {
       stroke: rgba(0,0,0,0.4); stroke-width: 1; fill: none;
       pointer-events: none;

@@ -2047,14 +2047,33 @@ webglPipeline.render();
           if (opts.hslRange) {
             const key = 'hsl_' + opts.hslRange;
             const cur = (state as any)[key] || { h: 0, s: 0, l: 0 };
-            (state as any)[key] = { ...cur, h: hue, s: sat * (r > 0 ? 1 : 0) };
-            // Update HSL slider labels
+            // Map absolute wheel position to slider scale (-100..100)
+            // Each range has a centre hue; wheel position relative to centre = hue shift.
+            const HSL_RANGES: Record<string, number> = {
+              red: 0, orange: 30, yellow: 60, green: 120,
+              aqua: 180, blue: 240, purple: 270, magenta: 300,
+            };
+            const centre = HSL_RANGES[opts.hslRange] ?? 0;
+            let delta = hue - centre;
+            // Normalise to -180..+180
+            if (delta > 180) delta -= 360;
+            if (delta < -180) delta += 360;
+            // ±180° = ±100 hue shift on slider; cap at slider range
+            const sliderH = Math.max(-100, Math.min(100, delta / 1.8));
+            // Saturation: distance from centre, 0..1 → 0..100 (only positive = boost)
+            const sliderS = r * 100;
+            (state as any)[key] = { h: sliderH, s: sliderS, l: cur.l ?? 0 };
+            // Update HSL slider labels and hidden input values
             const row = document.querySelector('.cg-hsl-row[data-range="' + opts.hslRange + '"]');
             if (row) {
               const hSpan = row.querySelector('.cg-hsl-val.h');
               const sSpan = row.querySelector('.cg-hsl-val.s');
-              if (hSpan) hSpan.textContent = String(Math.round(hue));
-              if (sSpan) sSpan.textContent = String(Math.round(sat));
+              if (hSpan) hSpan.textContent = String(Math.round(sliderH));
+              if (sSpan) sSpan.textContent = String(Math.round(sliderS));
+              const hInput = row.querySelector('input[data-channel="h"]') as HTMLInputElement | null;
+              const sInput = row.querySelector('input[data-channel="s"]') as HTMLInputElement | null;
+              if (hInput) hInput.value = String(Math.round(sliderH));
+              if (sInput) sInput.value = String(Math.round(sliderS));
             }
           }
           updatePointer(hue, r);
@@ -2070,8 +2089,19 @@ webglPipeline.render();
             hue = (state as any)[opts.stHueKey] ?? 0;
             sat = ((state as any)[opts.stSatKey!] ?? 0) / 100;
           } else if (opts.hslRange) {
+            // Convert slider values back to wheel position (inverse mapping)
             const k = (state as any)['hsl_' + opts.hslRange] || { h: 0, s: 0 };
-            hue = k.h ?? 0; sat = (k.s ?? 0) / 100;
+            const HSL_RANGES: Record<string, number> = {
+              red: 0, orange: 30, yellow: 60, green: 120,
+              aqua: 180, blue: 240, purple: 270, magenta: 300,
+            };
+            const centre = HSL_RANGES[opts.hslRange] ?? 0;
+            const sliderH = k.h ?? 0;
+            const sliderS = k.s ?? 0;
+            // slider h = delta / 1.8 → delta = sliderH * 1.8
+            const angle = (centre + sliderH * 1.8 + 360) % 360;
+            sat = sliderS / 100;
+            hue = angle;
           }
           updatePointer(hue, sat);
         }
