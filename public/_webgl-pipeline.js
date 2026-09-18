@@ -267,6 +267,7 @@ uniform float uStBalance;
 // \u2500\u2500 Grain \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 uniform float uGrainAmount;
 uniform float uGrainSize;
+uniform vec2  uTexelSize;
 
 // \u2500\u2500 Dehaze \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 uniform float uDehaze;
@@ -428,14 +429,19 @@ void main() {
     c = c - hazeAmount;
   }
 
-  // \u2500\u2500 Grain \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  // \u2500\u2500 Grain (Lightroom-style: subtle, shadow-biased, size affects particle scale not intensity) \u2500\u2500
   if (uGrainAmount > 0.0) {
-    float seed = dot(vUv, vec2(12.9898, 78.233)) + uTime;
+    // Size controls grain particle scale: 1 px at size=0, up to 4 px at size=100.
+    // Larger particles are produced by quantising the noise position to a coarser grid.
+    float grainScale = 1.0 + uGrainSize / 33.333;
+    vec2 grainPx = floor(vUv / uTexelSize / grainScale);
+    float seed = dot(grainPx, vec2(12.9898, 78.233)) + uTime;
     float noise = fract(sin(seed) * 43758.5453) - 0.5;
+    // Luma weighting: more grain in shadows/midtones, less in highlights (Lightroom behaviour)
     float luma = dot(c, vec3(0.299, 0.587, 0.114));
-    float grainWeight = mix(0.3, 1.0, luma);
-    float sizeScale = 1.0 + uGrainSize / 50.0;
-    float g = noise * (uGrainAmount / 100.0) * 2.0 * grainWeight * sizeScale;
+    float grainWeight = mix(1.0, 0.35, luma);
+    // Amount 100 produces a moderate ~7-10% max-intensity grain at default size
+    float g = noise * (uGrainAmount / 100.0) * 0.18 * grainWeight;
     c = c + g;
   }
 
@@ -1001,6 +1007,7 @@ function createWebGLPipeline() {
       runPass(hslProg, () => {
         const p = hslProg;
         gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
+        gl.uniform2f(gl.getUniformLocation(p, "uTexelSize"), 1 / w, 1 / h);
         const hsl = lastState.hsl || {};
         const cg = lastState.colorGrading;
         const RANGES = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
