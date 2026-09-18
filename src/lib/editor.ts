@@ -15,15 +15,6 @@ import { isFlat } from "./curve";
       const rawPreviewEnabled = window.__EDITOR_DATA__.rawPreviewEnabled;
 
       // DEBUG: visible diagnostic overlay
-      const _dbg = document.createElement('div');
-      _dbg.style.cssText = 'position:fixed;top:60px;left:10px;z-index:99999;background:#000;color:#0f0;padding:8px;font:11px monospace;border:1px solid #0f0;max-width:600px;line-height:1.4;';
-      _dbg.id = '_dbg_overlay';
-      document.body.appendChild(_dbg);
-      function _dbgLog(msg) {
-        _dbg.innerHTML += '<div>' + msg + '</div>';
-        if (_dbg.children.length > 30) _dbg.removeChild(_dbg.firstChild);
-      }
-      _dbgLog('INIT: imageId=' + imageId + ' sourceUrl=' + sourceUrl);
 
 
       // ---- Canvas 2D editor ----
@@ -381,7 +372,7 @@ import { isFlat } from "./curve";
 
       function fitCanvasToArea() {
         const area = document.querySelector('.canvas-area');
-        _dbgLog('fitCanvasToArea: src=' + sourceImage.width + 'x' + sourceImage.height + ' area=' + (area?area.clientWidth:0) + 'x' + (area?area.clientHeight:0));
+;
         const aw = area ? area.clientWidth : window.innerWidth;
         const ah = area ? area.clientHeight : window.innerHeight;
         if (!sourceImage.width) return;
@@ -796,14 +787,13 @@ import { isFlat } from "./curve";
         if (webglPipeline === null || webglPipeline === false) {
           if (webglPipeline === null) {
             const p = await loadWebGLPipeline();
-            if (!p) { _dbgLog('WGL: loadWebGLPipeline failed'); return false; }
+            if (!p) {; return false; }
             webglPipeline = p;
-            _dbgLog('WGL: pipeline loaded OK');
           } else {
             return false;
           }
         }
-        if (!sourceImage.complete || !sourceImage.naturalWidth) { _dbgLog('WGL: source not ready'); return false; }
+        if (!sourceImage.complete || !sourceImage.naturalWidth) {; return false; }
 
         // Re-upload source if the image changed
         if (_webglSourceRef !== sourceImage.src) {
@@ -1005,10 +995,10 @@ webglPipeline.render();
 
             // ---- Unified draw dispatcher ----
       function draw() {
-        _dbgLog('draw() called: complete=' + sourceImage.complete + ' nw=' + sourceImage.naturalWidth + ' canvas=' + canvas.width + 'x' + canvas.height);
+
         if (!sourceImage.complete || !sourceImage.naturalWidth) return;
         if (useWebGL) {
-          drawWebGL().then(ok => _dbgLog('drawWebGL returned ' + ok));
+          drawWebGL();
           applyVignetteOverlay();
           drawCropOverlayDom();
           try { if ((window as any).updateCropDims) (window as any).updateCropDims(); } catch(e) {}
@@ -1332,9 +1322,7 @@ webglPipeline.render();
       }
 
       sourceImage.onload = () => {
-        _dbgLog('IMG.onload: ' + sourceImage.width + 'x' + sourceImage.height);
         fitCanvasToArea();
-        _dbgLog('CANVAS: ' + canvas.width + 'x' + canvas.height + ' useWebGL=' + useWebGL + ' has2Dctx=' + !!ctx);
         _sharpenCacheKey = -1; // invalidate any stale sharpen cache
         if (_resetOnLoad) {
           _resetOnLoad = false;
