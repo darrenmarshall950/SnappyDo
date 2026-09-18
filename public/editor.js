@@ -1581,19 +1581,168 @@
       scheduleDraw();
     });
   });
-  ["cg-shadows-colour", "cg-midtones-colour", "cg-highlights-colour", "cg-global-colour"].forEach((id, i) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const key = id.replace("cg-", "cg_").replace(/-/g, "_");
-    el.addEventListener("input", () => {
-      const hex = el.value;
-      state[key] = [
-        parseInt(hex.slice(1, 3), 16),
-        parseInt(hex.slice(3, 5), 16),
-        parseInt(hex.slice(5, 7), 16)
-      ];
+  function rgb2hsl255(r, g, b) {
+    r /= 255;
+    g /= 255;
+    b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    const l = (mx + mn) / 2;
+    let h = 0, s = 0;
+    if (mx !== mn) {
+      const d = mx - mn;
+      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+      if (mx === r) h = (g - b) / d + (g < b ? 6 : 0);
+      else if (mx === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60;
+    }
+    return { h, s, l };
+  }
+  function hsl2rgb255(h, s, l) {
+    h /= 360;
+    let r, g, b;
+    if (s === 0) {
+      r = g = b = l;
+    } else {
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      r = hue2rgb(p, q, h + 1 / 3);
+      g = hue2rgb(p, q, h);
+      b = hue2rgb(p, q, h - 1 / 3);
+    }
+    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+  }
+  function hue2rgb(p, q, t) {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  }
+  function makeColorWheel(el, opts) {
+    const size = opts.size ?? 110;
+    const radius = size / 2 - 5;
+    const pointer = el.querySelector(".cw-pointer");
+    if (!pointer) return;
+    function updatePointer(hue, sat) {
+      const a = hue * Math.PI / 180;
+      const r = Math.min(1, sat);
+      const px = Math.cos(a) * radius * r;
+      const py = Math.sin(a) * radius * r;
+      pointer.setAttribute("cx", String(px));
+      pointer.setAttribute("cy", String(py));
+    }
+    function fromMouse(e) {
+      const rect = el.getBoundingClientRect();
+      const cx = rect.width / 2, cy = rect.height / 2;
+      let clientX, clientY;
+      if ("touches" in e && e.touches.length) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else if ("clientX" in e) {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      } else return;
+      const x = clientX - rect.left - cx;
+      const y = clientY - rect.top - cy;
+      const r = Math.min(1, Math.sqrt(x * x + y * y) / radius);
+      let angle = Math.atan2(y, x) * 180 / Math.PI;
+      if (angle < 0) angle += 360;
+      const hue = angle;
+      const sat = r * 100;
+      if (opts.stateKey) {
+        const [r255, g255, b255] = hsl2rgb255(hue, r, 0.5);
+        state[opts.stateKey] = [r255, g255, b255];
+      }
+      if (opts.stHueKey) {
+        state[opts.stHueKey] = hue;
+        state[opts.stSatKey] = sat;
+        const wrap = document.querySelector('.slider[data-key="' + opts.stHueKey + '"]');
+        if (wrap) wrap.querySelector(".val").textContent = String(Math.round(hue));
+        const wrap2 = document.querySelector('.slider[data-key="' + opts.stSatKey + '"]');
+        if (wrap2) wrap2.querySelector(".val").textContent = String(Math.round(sat));
+      }
+      if (opts.hslRange) {
+        const key = "hsl_" + opts.hslRange;
+        const cur = state[key] || { h: 0, s: 0, l: 0 };
+        state[key] = { ...cur, h: hue, s: sat * (r > 0 ? 1 : 0) };
+        const row = document.querySelector('.cg-hsl-row[data-range="' + opts.hslRange + '"]');
+        if (row) {
+          const hSpan = row.querySelector(".cg-hsl-val.h");
+          const sSpan = row.querySelector(".cg-hsl-val.s");
+          if (hSpan) hSpan.textContent = String(Math.round(hue));
+          if (sSpan) sSpan.textContent = String(Math.round(sat));
+        }
+      }
+      updatePointer(hue, r);
+      scheduleDraw();
+    }
+    function initFromState() {
+      let hue = 0, sat = 0;
+      if (opts.stateKey) {
+        const c = state[opts.stateKey] || [128, 128, 128];
+        const hsl = rgb2hsl255(c[0], c[1], c[2]);
+        hue = hsl.h;
+        sat = hsl.s;
+      } else if (opts.stHueKey) {
+        hue = state[opts.stHueKey] ?? 0;
+        sat = (state[opts.stSatKey] ?? 0) / 100;
+      } else if (opts.hslRange) {
+        const k = state["hsl_" + opts.hslRange] || { h: 0, s: 0 };
+        hue = k.h ?? 0;
+        sat = (k.s ?? 0) / 100;
+      }
+      updatePointer(hue, sat);
+    }
+    let dragging2 = false;
+    el.addEventListener("mousedown", (e) => {
+      dragging2 = true;
+      fromMouse(e);
+      e.preventDefault();
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (dragging2) fromMouse(e);
+    });
+    window.addEventListener("mouseup", () => {
+      dragging2 = false;
+    });
+    el.addEventListener("touchstart", (e) => {
+      dragging2 = true;
+      fromMouse(e);
+      e.preventDefault();
+    }, { passive: false });
+    el.addEventListener("touchmove", (e) => {
+      if (dragging2) fromMouse(e);
+      e.preventDefault();
+    }, { passive: false });
+    el.addEventListener("touchend", () => {
+      dragging2 = false;
+    });
+    el.addEventListener("dblclick", () => {
+      if (opts.stateKey) state[opts.stateKey] = [128, 128, 128];
+      if (opts.stHueKey) {
+        state[opts.stHueKey] = 0;
+        state[opts.stSatKey] = 0;
+      }
+      if (opts.hslRange) {
+        const key = "hsl_" + opts.hslRange;
+        state[key] = { h: 0, s: 0, l: 0 };
+      }
+      updatePointer(0, 0);
       scheduleDraw();
     });
+    initFromState();
+  }
+  makeColorWheel(document.getElementById("cw-cg-shadows-colour"), { stateKey: "cg_shadows_colour" });
+  makeColorWheel(document.getElementById("cw-cg-midtones-colour"), { stateKey: "cg_midtones_colour" });
+  makeColorWheel(document.getElementById("cw-cg-highlights-colour"), { stateKey: "cg_highlights_colour" });
+  makeColorWheel(document.getElementById("cw-cg-global-colour"), { stateKey: "cg_global_colour" });
+  makeColorWheel(document.getElementById("cw-st-shadows"), { stHueKey: "st_shadows_hue", stSatKey: "st_shadows_saturation" });
+  makeColorWheel(document.getElementById("cw-st-highlights"), { stHueKey: "st_highlights_hue", stSatKey: "st_highlights_saturation" });
+  ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"].forEach((rng) => {
+    const el = document.getElementById("cw-hsl-" + rng);
+    if (el) makeColorWheel(el, { hslRange: rng });
   });
   var cgModeSel = document.getElementById("cg-mode-select");
   if (cgModeSel) {

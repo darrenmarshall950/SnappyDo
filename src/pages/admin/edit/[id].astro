@@ -688,22 +688,74 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
     .cg-hsl-grid { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
     .cg-hsl-row {
       display: grid;
-      grid-template-columns: 14px 52px 1fr 1fr 1fr 20px 20px 20px;
+      grid-template-columns: 14px 60px 80px 1fr 24px 24px;
       align-items: center;
       gap: 4px;
       font-size: 11px;
     }
+    .cg-hsl-row .cw { width: 70px; height: 70px; }
+    .cg-hsl-row.hidden-hs .cg-hsl-slider[data-channel="h"],
+    .cg-hsl-row.hidden-hs .cg-hsl-slider[data-channel="s"],
+    .cg-hsl-row.hidden-hs .cg-hsl-val.h,
+    .cg-hsl-row.hidden-hs .cg-hsl-val.s { display: none; }
     .cg-swatch { width: 14px; height: 14px; border-radius: 2px; flex-shrink: 0; }
     .cg-range-name { color: #888; font-size: 11px; white-space: nowrap; overflow: hidden; }
     .cg-hsl-slider { width: 100%; height: 4px; accent-color: #4af; cursor: pointer; }
     .cg-hsl-val { color: #555; font-size: 10px; text-align: center; }
     .cg-chan-label { font-size: 9px; color: #555; text-align: center; }
-    .cg-hsl-header { display: grid; grid-template-columns: 14px 52px 1fr 1fr 1fr 20px 20px 20px; gap: 4px; font-size: 10px; color: #444; margin-top: 2px; }
+    .cg-hsl-header { display: grid; grid-template-columns: 14px 60px 80px 1fr 24px 24px; gap: 4px; font-size: 10px; color: #444; margin-top: 2px; }
     .cg-grading-section { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
     .cg-wheel-row { display: flex; gap: 8px; justify-content: space-between; }
     .cg-wheel-group { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
     .cg-wheel-group label { font-size: 10px; color: #888; }
     .cg-color-wheel { width: 36px; height: 36px; border: 1px solid #333; border-radius: 4px; padding: 1px; background: #1a1a1a; cursor: pointer; }
+
+    /* ── Visual colour wheels ──────────────────────────────────── */
+    .cw {
+      position: relative;
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      cursor: crosshair;
+      touch-action: none;
+      user-select: none;
+      box-shadow: 0 0 0 1px #333, 0 2px 4px rgba(0,0,0,0.5);
+    }
+    .cw.compact { width: 70px; height: 70px; }
+    .cw-ring {
+      position: absolute; inset: 0; border-radius: 50%;
+      background: conic-gradient(
+        from 0deg,
+        hsl(0,100%,50%),  hsl(30,100%,50%),  hsl(60,100%,50%),
+        hsl(90,100%,50%),  hsl(120,100%,50%), hsl(150,100%,50%),
+        hsl(180,100%,50%), hsl(210,100%,50%), hsl(240,100%,50%),
+        hsl(270,100%,50%), hsl(300,100%,50%), hsl(330,100%,50%),
+        hsl(360,100%,50%)
+      );
+    }
+    .cw-mask {
+      position: absolute; inset: 0; border-radius: 50%;
+      background: radial-gradient(circle at center, rgba(255,255,255,1) 0%, rgba(255,255,255,0) 65%);
+    }
+    .cw-svg {
+      position: absolute; inset: 0; pointer-events: none;
+      width: 100%; height: 100%;
+    }
+    .cw-pointer {
+      fill: #fff; stroke: #000; stroke-width: 1.25;
+      pointer-events: none;
+    }
+    .cw-compass {
+      stroke: rgba(0,0,0,0.4); stroke-width: 1; fill: none;
+      pointer-events: none;
+    }
+    .cw-row {
+      display: flex; align-items: center; gap: 10px;
+      margin: 6px 0;
+    }
+    .cw-row .cw-label {
+      min-width: 80px; font-size: 11px; color: #aaa;
+    }
     .cg-mode-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #888; }
     .cg-mode-row select { background: #222; color: #fafafa; border: 1px solid #333; border-radius: 4px; padding: 2px 4px; font-size: 11px; }
     .cg-global-section { display: flex; gap: 8px; margin-top: 6px; }
@@ -897,32 +949,39 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           <details class="fx-details">
             <summary>Split Toning</summary>
             <div class="st-section">
-              <div class="st-subhead">Shadows</div>
-              <div class="slider" data-key="st_shadows_hue">
-                <label>Hue</label>
-                <input type="range" min="0" max="360" step="1" />
-                <span class="val">0</span>
-              </div>
-              <div class="slider" data-key="st_shadows_saturation">
-                <label>Saturation</label>
-                <input type="range" min="0" max="100" step="1" />
-                <span class="val">0</span>
-              </div>
-              <div class="st-subhead">Highlights</div>
-              <div class="slider" data-key="st_highlights_hue">
-                <label>Hue</label>
-                <input type="range" min="0" max="360" step="1" />
-                <span class="val">0</span>
-              </div>
-              <div class="slider" data-key="st_highlights_saturation">
-                <label>Saturation</label>
-                <input type="range" min="0" max="100" step="1" />
-                <span class="val">0</span>
+              <div class="cw-row">
+                <div>
+                  <div class="st-subhead">Shadows</div>
+                  <div class="cw" id="cw-st-shadows" data-st-hue="st_shadows_hue" data-st-sat="st_shadows_saturation" style="margin: 4px auto;">
+                    <div class="cw-ring"></div>
+                    <div class="cw-mask"></div>
+                    <svg class="cw-svg" viewBox="-50 -50 100 100">
+                      <circle class="cw-pointer" cx="0" cy="0" r="4.5" />
+                    </svg>
+                  </div>
+                </div>
+                <div>
+                  <div class="st-subhead">Highlights</div>
+                  <div class="cw" id="cw-st-highlights" data-st-hue="st_highlights_hue" data-st-sat="st_highlights_saturation" style="margin: 4px auto;">
+                    <div class="cw-ring"></div>
+                    <div class="cw-mask"></div>
+                    <svg class="cw-svg" viewBox="-50 -50 100 100">
+                      <circle class="cw-pointer" cx="0" cy="0" r="4.5" />
+                    </svg>
+                  </div>
+                </div>
               </div>
               <div class="slider" data-key="st_balance">
                 <label>Balance</label>
                 <input type="range" min="-100" max="100" step="1" />
                 <span class="val">0</span>
+              </div>
+              <!-- Hidden sliders kept for keyboard accessibility / preset compat -->
+              <div style="display:none">
+                <div class="slider" data-key="st_shadows_hue"><input type="range" min="0" max="360" /><span class="val">0</span></div>
+                <div class="slider" data-key="st_shadows_saturation"><input type="range" min="0" max="100" /><span class="val">0</span></div>
+                <div class="slider" data-key="st_highlights_hue"><input type="range" min="0" max="360" /><span class="val">0</span></div>
+                <div class="slider" data-key="st_highlights_saturation"><input type="range" min="0" max="100" /><span class="val">0</span></div>
               </div>
             </div>
           </details>
@@ -1022,9 +1081,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           <details class="cg-details">
             <summary>HSL Mixer</summary>
             <div class="cg-hsl-grid">
-              <div class="cg-hsl-row" data-range="red">
+              <div class="cg-hsl-row hidden-hs" data-range="red">
                 <span class="cg-swatch" style="background:#ff0000"></span>
                 <span class="cg-range-name">Red</span>
+                <div class="cw" id="cw-hsl-red" data-hsl-range="red" style="width:70px;height:70px;margin:0 auto;">
+                  <div class="cw-ring"></div>
+                  <div class="cw-mask"></div>
+                  <svg class="cw-svg" viewBox="-50 -50 100 100">
+                    <circle class="cw-pointer" cx="0" cy="0" r="4" />
+                  </svg>
+                </div>
                 <input type="range" class="cg-hsl-slider" data-range="red" data-channel="h" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="red" data-channel="s" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="red" data-channel="l" min="-100" max="100" step="1" value="0" />
@@ -1032,9 +1098,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 <span class="cg-hsl-val s">0</span>
                 <span class="cg-hsl-val l">0</span>
               </div>
-              <div class="cg-hsl-row" data-range="orange">
+              <div class="cg-hsl-row hidden-hs" data-range="orange">
                 <span class="cg-swatch" style="background:#ff8000"></span>
                 <span class="cg-range-name">Orange</span>
+                <div class="cw" id="cw-hsl-orange" data-hsl-range="orange" style="width:70px;height:70px;margin:0 auto;">
+                  <div class="cw-ring"></div>
+                  <div class="cw-mask"></div>
+                  <svg class="cw-svg" viewBox="-50 -50 100 100">
+                    <circle class="cw-pointer" cx="0" cy="0" r="4" />
+                  </svg>
+                </div>
                 <input type="range" class="cg-hsl-slider" data-range="orange" data-channel="h" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="orange" data-channel="s" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="orange" data-channel="l" min="-100" max="100" step="1" value="0" />
@@ -1042,9 +1115,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 <span class="cg-hsl-val s">0</span>
                 <span class="cg-hsl-val l">0</span>
               </div>
-              <div class="cg-hsl-row" data-range="yellow">
+              <div class="cg-hsl-row hidden-hs" data-range="yellow">
                 <span class="cg-swatch" style="background:#ffff00"></span>
                 <span class="cg-range-name">Yellow</span>
+                <div class="cw" id="cw-hsl-yellow" data-hsl-range="yellow" style="width:70px;height:70px;margin:0 auto;">
+                  <div class="cw-ring"></div>
+                  <div class="cw-mask"></div>
+                  <svg class="cw-svg" viewBox="-50 -50 100 100">
+                    <circle class="cw-pointer" cx="0" cy="0" r="4" />
+                  </svg>
+                </div>
                 <input type="range" class="cg-hsl-slider" data-range="yellow" data-channel="h" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="yellow" data-channel="s" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="yellow" data-channel="l" min="-100" max="100" step="1" value="0" />
@@ -1052,9 +1132,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 <span class="cg-hsl-val s">0</span>
                 <span class="cg-hsl-val l">0</span>
               </div>
-              <div class="cg-hsl-row" data-range="green">
+              <div class="cg-hsl-row hidden-hs" data-range="green">
                 <span class="cg-swatch" style="background:#00ff00"></span>
                 <span class="cg-range-name">Green</span>
+                <div class="cw" id="cw-hsl-green" data-hsl-range="green" style="width:70px;height:70px;margin:0 auto;">
+                  <div class="cw-ring"></div>
+                  <div class="cw-mask"></div>
+                  <svg class="cw-svg" viewBox="-50 -50 100 100">
+                    <circle class="cw-pointer" cx="0" cy="0" r="4" />
+                  </svg>
+                </div>
                 <input type="range" class="cg-hsl-slider" data-range="green" data-channel="h" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="green" data-channel="s" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="green" data-channel="l" min="-100" max="100" step="1" value="0" />
@@ -1062,9 +1149,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 <span class="cg-hsl-val s">0</span>
                 <span class="cg-hsl-val l">0</span>
               </div>
-              <div class="cg-hsl-row" data-range="aqua">
+              <div class="cg-hsl-row hidden-hs" data-range="aqua">
                 <span class="cg-swatch" style="background:#00ffff"></span>
                 <span class="cg-range-name">Aqua</span>
+                <div class="cw" id="cw-hsl-aqua" data-hsl-range="aqua" style="width:70px;height:70px;margin:0 auto;">
+                  <div class="cw-ring"></div>
+                  <div class="cw-mask"></div>
+                  <svg class="cw-svg" viewBox="-50 -50 100 100">
+                    <circle class="cw-pointer" cx="0" cy="0" r="4" />
+                  </svg>
+                </div>
                 <input type="range" class="cg-hsl-slider" data-range="aqua" data-channel="h" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="aqua" data-channel="s" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="aqua" data-channel="l" min="-100" max="100" step="1" value="0" />
@@ -1072,9 +1166,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 <span class="cg-hsl-val s">0</span>
                 <span class="cg-hsl-val l">0</span>
               </div>
-              <div class="cg-hsl-row" data-range="blue">
+              <div class="cg-hsl-row hidden-hs" data-range="blue">
                 <span class="cg-swatch" style="background:#0000ff"></span>
                 <span class="cg-range-name">Blue</span>
+                <div class="cw" id="cw-hsl-blue" data-hsl-range="blue" style="width:70px;height:70px;margin:0 auto;">
+                  <div class="cw-ring"></div>
+                  <div class="cw-mask"></div>
+                  <svg class="cw-svg" viewBox="-50 -50 100 100">
+                    <circle class="cw-pointer" cx="0" cy="0" r="4" />
+                  </svg>
+                </div>
                 <input type="range" class="cg-hsl-slider" data-range="blue" data-channel="h" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="blue" data-channel="s" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="blue" data-channel="l" min="-100" max="100" step="1" value="0" />
@@ -1082,9 +1183,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 <span class="cg-hsl-val s">0</span>
                 <span class="cg-hsl-val l">0</span>
               </div>
-              <div class="cg-hsl-row" data-range="purple">
+              <div class="cg-hsl-row hidden-hs" data-range="purple">
                 <span class="cg-swatch" style="background:#8000ff"></span>
                 <span class="cg-range-name">Purple</span>
+                <div class="cw" id="cw-hsl-purple" data-hsl-range="purple" style="width:70px;height:70px;margin:0 auto;">
+                  <div class="cw-ring"></div>
+                  <div class="cw-mask"></div>
+                  <svg class="cw-svg" viewBox="-50 -50 100 100">
+                    <circle class="cw-pointer" cx="0" cy="0" r="4" />
+                  </svg>
+                </div>
                 <input type="range" class="cg-hsl-slider" data-range="purple" data-channel="h" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="purple" data-channel="s" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="purple" data-channel="l" min="-100" max="100" step="1" value="0" />
@@ -1092,9 +1200,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 <span class="cg-hsl-val s">0</span>
                 <span class="cg-hsl-val l">0</span>
               </div>
-              <div class="cg-hsl-row" data-range="magenta">
+              <div class="cg-hsl-row hidden-hs" data-range="magenta">
                 <span class="cg-swatch" style="background:#ff00ff"></span>
                 <span class="cg-range-name">Magenta</span>
+                <div class="cw" id="cw-hsl-magenta" data-hsl-range="magenta" style="width:70px;height:70px;margin:0 auto;">
+                  <div class="cw-ring"></div>
+                  <div class="cw-mask"></div>
+                  <svg class="cw-svg" viewBox="-50 -50 100 100">
+                    <circle class="cw-pointer" cx="0" cy="0" r="4" />
+                  </svg>
+                </div>
                 <input type="range" class="cg-hsl-slider" data-range="magenta" data-channel="h" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="magenta" data-channel="s" min="-100" max="100" step="1" value="0" />
                 <input type="range" class="cg-hsl-slider" data-range="magenta" data-channel="l" min="-100" max="100" step="1" value="0" />
@@ -1103,8 +1218,8 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 <span class="cg-hsl-val l">0</span>
               </div>
               <div class="cg-hsl-header">
-                <span></span><span></span>
-                <span class="cg-chan-label">H</span><span class="cg-chan-label">S</span><span class="cg-chan-label">L</span>
+                <span></span><span></span><span></span>
+                <span class="cg-chan-label">L</span><span class="cg-chan-label">HS</span>
               </div>
             </div>
           </details>
@@ -1115,7 +1230,13 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
               <div class="cg-wheel-row">
                 <div class="cg-wheel-group">
                   <label>Shadows</label>
-                  <input type="color" class="cg-color-wheel" id="cg-shadows-colour" value="#808080" />
+                  <div class="cw" id="cw-cg-shadows-colour" data-state-key="cg_shadows_colour">
+                    <div class="cw-ring"></div>
+                    <div class="cw-mask"></div>
+                    <svg class="cw-svg" viewBox="-50 -50 100 100">
+                      <circle class="cw-pointer" cx="0" cy="0" r="4.5" />
+                    </svg>
+                  </div>
                   <div class="slider" data-key="cg_shadows_intensity">
                     <input type="range" min="0" max="100" step="1" value="0" />
                     <span class="val">0</span>
@@ -1123,7 +1244,13 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 </div>
                 <div class="cg-wheel-group">
                   <label>Midtones</label>
-                  <input type="color" class="cg-color-wheel" id="cg-midtones-colour" value="#808080" />
+                  <div class="cw" id="cw-cg-midtones-colour" data-state-key="cg_midtones_colour">
+                    <div class="cw-ring"></div>
+                    <div class="cw-mask"></div>
+                    <svg class="cw-svg" viewBox="-50 -50 100 100">
+                      <circle class="cw-pointer" cx="0" cy="0" r="4.5" />
+                    </svg>
+                  </div>
                   <div class="slider" data-key="cg_midtones_intensity">
                     <input type="range" min="0" max="100" step="1" value="0" />
                     <span class="val">0</span>
@@ -1131,7 +1258,13 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 </div>
                 <div class="cg-wheel-group">
                   <label>Highlights</label>
-                  <input type="color" class="cg-color-wheel" id="cg-highlights-colour" value="#808080" />
+                  <div class="cw" id="cw-cg-highlights-colour" data-state-key="cg_highlights_colour">
+                    <div class="cw-ring"></div>
+                    <div class="cw-mask"></div>
+                    <svg class="cw-svg" viewBox="-50 -50 100 100">
+                      <circle class="cw-pointer" cx="0" cy="0" r="4.5" />
+                    </svg>
+                  </div>
                   <div class="slider" data-key="cg_highlights_intensity">
                     <input type="range" min="0" max="100" step="1" value="0" />
                     <span class="val">0</span>
@@ -1152,7 +1285,13 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
             <summary>Global</summary>
             <div class="cg-global-section">
               <div class="cg-wheel-group">
-                <input type="color" class="cg-color-wheel" id="cg-global-colour" value="#808080" />
+                <div class="cw" id="cw-cg-global-colour" data-state-key="cg_global_colour">
+                  <div class="cw-ring"></div>
+                  <div class="cw-mask"></div>
+                  <svg class="cw-svg" viewBox="-50 -50 100 100">
+                    <circle class="cw-pointer" cx="0" cy="0" r="4.5" />
+                  </svg>
+                </div>
                 <div class="slider" data-key="cg_global_intensity">
                   <input type="range" min="0" max="100" step="1" value="0" />
                   <span class="val">0</span>
