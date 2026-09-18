@@ -100,6 +100,9 @@ import { isFlat } from "./curve";
         const result = await _drawPipelineLoading;
         webglPipeline = result;
         (window as any)._webgl = webglPipeline;  // expose for curve tool, histogram, etc.
+      (window as any).state = state;  // expose for preset save/load + CDP inspection
+      (window as any).draw = draw;
+      (window as any).scheduleDraw = (typeof scheduleDraw === 'function') ? scheduleDraw : draw;
         return webglPipeline;
       }
 
@@ -1545,6 +1548,8 @@ webglPipeline.render();
             sel.appendChild(opt);
           }
           window.__snappydoPresets = presets;
+          // Refresh Delete button visibility in case a new user preset was just saved
+          if (typeof updateDeletePresetButton === 'function') updateDeletePresetButton();
         } catch (e) { console.warn('loadPresets failed', e); }
       }
 
@@ -1578,7 +1583,7 @@ webglPipeline.render();
             opt.textContent = prefix + l.name;
             sel.appendChild(opt);
           }
-          // Keep the un-sorted list on window so applySynthParams can find any LUT by id
+          // Keep full unsorted list on window for lookup-by-id
           window.__snappydoLuts = luts;
         } catch (e) { console.warn('loadLuts failed', e); }
       }
@@ -1605,22 +1610,10 @@ webglPipeline.render();
         return cached;
       }
 
-      // Show the Delete button only when the selected LUT is a user-saved (synthesised) one.
-      function updateDeleteLutButton() {
-        const btn = document.getElementById('btn-delete-lut');
-        if (!btn) return;
-        const sel = document.getElementById('lut-select');
-        const v = sel ? sel.value : '';
-        if (!v) { btn.style.display = 'none'; return; }
-        const meta = (window.__snappydoLuts || []).find((x: any) => String(x.id) === String(v));
-        btn.style.display = (meta && meta.kind === 'synthesised') ? 'inline-flex' : 'none';
-      }
-
       // LUT select change → fetch + activate, and restore saved slider params if synthesised
       const lutSelect = document.getElementById('lut-select');
       if (lutSelect) {
         lutSelect.addEventListener('change', async () => {
-          updateDeleteLutButton();
           const v = lutSelect.value;
           state.lut_id = v ? Number(v) : 0;
           if (state.lut_id) {
@@ -1638,9 +1631,6 @@ webglPipeline.render();
 
               // If this LUT was synthesised from sliders, restore those sliders.
               const meta = (window.__snappydoLuts || []).find((x: any) => Number(x.id) === state.lut_id);
-              if (meta && meta.synth_params) {
-                applySynthParams(meta.synth_params);
-              }
             } catch (e) {
               setStatus('Failed to load LUT.', true);
               state.lut_id = 0;
@@ -1654,135 +1644,22 @@ webglPipeline.render();
         });
       }
 
-      // Apply synth_params to sliders + state. The baked cube data already encodes
-      // these values, but moving the visible sliders lets the user see/edit them.
-      function applySynthParams(params: Record<string, number>) {
-        if (!params || typeof params !== 'object') return;
-        const LOOK_KEYS = ['exposure','brightness','contrast','saturation','temp','tint'];
-        for (const k of LOOK_KEYS) {
-          if (typeof params[k] === 'number' && Number.isFinite(params[k])) {
-            (state as any)[k] = params[k];
-            const wrap = document.querySelector('.slider[data-key="' + k + '"]');
-            if (wrap) {
-              const inp = wrap.querySelector('input') as HTMLInputElement | null;
-              const val = wrap.querySelector('.val');
-              if (inp) inp.value = String(params[k]);
-              if (val) val.textContent = String(params[k]);
-            }
-          }
-        }
-        setStatus('LUT sliders restored.');
-      }
-
-      // Wire the Save LUT button
-      const btnSaveLut = document.getElementById('btn-save-lut');
-
-      // Wire the Delete LUT button
-      const btnDeleteLut = document.getElementById('btn-delete-lut');
-      if (btnDeleteLut) {
-        btnDeleteLut.addEventListener('click', async () => {
-          const sel = document.getElementById('lut-select');
-          if (!sel || !sel.value) return;
-          const meta = (window.__snappydoLuts || []).find((x: any) => String(x.id) === String(sel.value));
-          if (!meta || meta.kind !== 'synthesised') return;
-          if (!confirm('Delete "' + meta.name + '"? This cannot be undone.')) return;
-
-          btnDeleteLut.disabled = true;
-          const originalText = btnDeleteLut.textContent;
-          btnDeleteLut.textContent = 'Deleting…';
-          try {
-            const res = await fetch('/api/luts/' + meta.id, {
-              method: 'DELETE',
-              credentials: 'same-origin',
-            });
-            if (!res.ok) {
-              const err = await res.json().catch(() => ({ error: 'delete failed' }));
-              setStatus('Delete LUT failed: ' + (err.error || res.status), true);
-              return;
-            }
-            // Refresh + clear selection
-            await loadLuts();
-            sel.value = '';
-            state.lut_id = 0;
-            activeLut = null;
-            updateDeleteLutButton();
-            draw();
-            setStatus('Deleted "' + meta.name + '".');
-          } catch (e: any) {
-            setStatus('Delete LUT error: ' + (e?.message || String(e)), true);
-          } finally {
-            btnDeleteLut.disabled = false;
-            btnDeleteLut.textContent = originalText;
-          }
-        });
-      }
-
-      const __originalBtnSaveLut_init = btnSaveLut; // for clarity, no-op
-
-      if (btnSaveLut) {
-        btnSaveLut.addEventListener('click', async () => {
-          const defaultName = state.lut_id
-            ? ((window.__snappydoLuts || []).find((x: any) => Number(x.id) === state.lut_id)?.name || 'My LUT')
-            : 'My LUT';
-          const name = prompt('Name for the new LUT:', defaultName + ' (edited)');
-          if (!name || !name.trim()) return;
-
-          // Collect look sliders (the ones applySlidersToRgb supports)
-          const LOOK_KEYS = ['exposure','brightness','contrast','saturation','temp','tint'];
-          const params: Record<string, number> = {};
-          for (const k of LOOK_KEYS) {
-            if (typeof (state as any)[k] === 'number') {
-              params[k] = (state as any)[k];
-            }
-          }
-
-          btnSaveLut.disabled = true;
-          const originalText = btnSaveLut.textContent;
-          btnSaveLut.textContent = 'Saving…';
-          try {
-            const res = await fetch('/api/luts/synth', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                name: name.trim(),
-                params,
-                base_lut_id: state.lut_id || null,
-              }),
-            });
-            if (!res.ok) {
-              const err = await res.json().catch(() => ({ error: 'save failed' }));
-              setStatus('Save LUT failed: ' + (err.error || res.status), true);
-              return;
-            }
-            const json = await res.json();
-            await loadLuts(); // refresh dropdown
-            if (json.lut && json.lut.id) {
-              lutSelect.value = String(json.lut.id);
-              state.lut_id = json.lut.id;
-              activeLut = await fetchLutData(json.lut.id);
-              updateDeleteLutButton();
-              draw();
-            }
-            // Flash "Saved!" flag
-            const flag = document.getElementById('lut-saved-flag');
-            if (flag) {
-              flag.textContent = 'Saved!';
-              flag.style.display = 'inline';
-              setTimeout(() => { flag.style.display = 'none'; }, 2000);
-            }
-          } catch (e: any) {
-            setStatus('Save LUT error: ' + (e?.message || String(e)), true);
-          } finally {
-            btnSaveLut.disabled = false;
-            btnSaveLut.textContent = originalText;
-          }
-        });
+      // Show/hide the Delete button based on whether the selected preset is a user-saved one
+      function updateDeletePresetButton() {
+        const btn = document.getElementById('btn-delete-preset');
+        const sel = document.getElementById('preset-select');
+        if (!btn || !sel) return;
+        const v = sel.value;
+        if (!v) { btn.style.display = 'none'; return; }
+        const meta = (window.__snappydoPresets || []).find((x: any) => String(x.id) === String(v));
+        btn.style.display = (meta && meta.kind === 'user') ? 'inline-flex' : 'none';
       }
 
       // Preset apply → load params into state + sliders + LUT select
       const presetSelect = document.getElementById('preset-select');
       if (presetSelect) {
         presetSelect.addEventListener('change', () => {
+          updateDeletePresetButton();
           const id = Number(presetSelect.value);
           if (!id) return;
           const p = (window.__snappydoPresets || []).find((x) => x.id === id);
@@ -1791,25 +1668,43 @@ webglPipeline.render();
         });
       }
 
-      function applyPresetToState(params) {
-        if (!params) return;
-        for (const k of PRESET_SLIDER_KEYS) {
-          if (k in params) setSliderValue(k, Number(params[k]) || 0);
-        }
-        // LUT — set the dropdown and (async) load the data
-        const newLutId = params.lut_id ? Number(params.lut_id) : 0;
-        state.lut_id = newLutId;
-        const lutSelEl = document.getElementById('lut-select');
-        if (lutSelEl) lutSelEl.value = newLutId ? String(newLutId) : '';
-        if (newLutId) {
-          fetchLutData(newLutId).then((d) => { activeLut = d; draw(); }).catch(() => { activeLut = null; });
-        } else {
-          activeLut = null;
-        }
-        applyVignetteOverlay();
-        _sharpenCacheKey = -1;
-        draw();
+      // Delete Preset button — DELETE /api/presets/[id] + refresh
+      const btnDeletePreset = document.getElementById('btn-delete-preset');
+      if (btnDeletePreset) {
+        btnDeletePreset.addEventListener('click', async () => {
+          const sel = document.getElementById('preset-select');
+          if (!sel) return;
+          const meta = (window.__snappydoPresets || []).find((x: any) => String(x.id) === String(sel.value));
+          if (!meta || meta.kind !== 'user') return;
+          if (!confirm('Delete preset "' + meta.name + '"? This cannot be undone.')) return;
+          btnDeletePreset.disabled = true;
+          const original = btnDeletePreset.textContent;
+          btnDeletePreset.textContent = 'Deleting…';
+          try {
+            const res = await fetch('/api/presets/' + meta.id, {
+              method: 'DELETE',
+              credentials: 'same-origin',
+            });
+            if (res.status === 204) {
+              setStatus('Preset deleted: ' + meta.name);
+              sel.value = '';
+              await loadPresets();
+              updateDeletePresetButton();
+            } else if (res.status === 403) {
+              setStatus('Cannot delete built-in preset', true);
+            } else {
+              const err = await res.json().catch(() => ({}));
+              setStatus('Delete preset failed: ' + (err.error || res.status), true);
+            }
+          } catch (e: any) {
+            setStatus('Delete preset error: ' + (e?.message || String(e)), true);
+          } finally {
+            btnDeletePreset.disabled = false;
+            btnDeletePreset.textContent = original;
+          }
+        });
       }
+
 
       // Save current state as a user preset
       const btnSavePreset = document.getElementById('btn-save-preset');
@@ -1819,9 +1714,9 @@ webglPipeline.render();
           if (!name) return;
           btnSavePreset.disabled = true;
           try {
-            // Snapshot current state (omit crop so preset is reusable across images)
-            const snapshot = { lut_id: state.lut_id || 0, lut_intensity: state.lut_intensity || 0 };
-            for (const k of PRESET_SLIDER_KEYS) snapshot[k] = state[k] || 0;
+            // Snapshot COMPLETE state: sliders + wheels + tone curve (so the preset
+            // restores everything, not just the slider panel).
+            const snapshot = snapshotPreset();
             const res = await fetch('/api/presets', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
@@ -1834,6 +1729,7 @@ webglPipeline.render();
             }
             setStatus('Preset saved: ' + name, false);
             await loadPresets();
+            if (typeof updateDeletePresetButton === 'function') updateDeletePresetButton();
           } finally {
             btnSavePreset.disabled = false;
           }
@@ -1851,6 +1747,209 @@ webglPipeline.render();
           fetchLutData(state.lut_id).then((d) => { activeLut = d; draw(); }).catch(() => { activeLut = null; });
         }
       });
+
+      // ---- Preset capture/restore helper ----
+
+      // Extended preset keys: base sliders + ST/CG/HSL/grain/dehaze
+      const PRESET_EXTRA_KEYS = [
+        // Split Toning
+        'st_balance', 'st_shadows_hue', 'st_shadows_saturation',
+        'st_highlights_hue', 'st_highlights_saturation',
+        // Color Grading colours + mode
+        'cg_mode',
+        'cg_shadows_colour', 'cg_midtones_colour', 'cg_highlights_colour', 'cg_global_colour',
+        // HSL ranges
+        'hsl_red', 'hsl_orange', 'hsl_yellow', 'hsl_green',
+        'hsl_aqua', 'hsl_blue', 'hsl_purple', 'hsl_magenta',
+        // Grain + dehaze
+        'grain_amount', 'grain_size',
+        'dehaze',
+      ];
+
+      const HSL_RANGES_LIST = ['red','orange','yellow','green','aqua','blue','purple','magenta'];
+
+      // Snapshot current state for preset save. Includes slider-style keys AND
+      // colour wheels + tone curve (so loading a preset restores EVERYTHING).
+      function snapshotPreset() {
+        const snapshot: Record<string, any> = {};
+        // base + extra scalar keys
+        const all: string[] = [];
+        all.push(...(typeof PRESET_SLIDER_KEYS !== 'undefined' ? PRESET_SLIDER_KEYS : []));
+        all.push(...PRESET_EXTRA_KEYS);
+        for (const k of all) {
+          if (k in state && state[k as keyof typeof state] !== undefined) {
+            snapshot[k] = state[k as keyof typeof state];
+          }
+        }
+        // LUT
+        snapshot.lut_id = state.lut_id || 0;
+        snapshot.lut_intensity = state.lut_intensity || 0;
+        // Tone curve: serialise each channel as [[x,y],...]
+        const cv = (window as any)._cvData;
+        if (cv && cv.rgb && cv.r && cv.g && cv.b) {
+          snapshot.curve = {
+            rgb: cv.rgb.map((p: [number, number]) => [p[0], p[1]]),
+            r: cv.r.map((p: [number, number]) => [p[0], p[1]]),
+            g: cv.g.map((p: [number, number]) => [p[0], p[1]]),
+            b: cv.b.map((p: [number, number]) => [p[0], p[1]]),
+          };
+        }
+        // Capture the active channel too so the restore knows whether to mirror rgb→r/g/b
+        if (typeof (window as any)._cvCh === 'function') {
+          snapshot.curveCh = (window as any)._cvCh();
+        }
+        return snapshot;
+      }
+
+      // Move a colour wheel's pointer to (hue, sat 0..1) by directly manipulating the SVG circle.
+      function setWheelPointer(wheelId: string, hue: number, sat: number) {
+        const el = document.getElementById(wheelId);
+        if (!el) return;
+        const pointer = el.querySelector('.cw-pointer') as SVGCircleElement | null;
+        if (!pointer) return;
+        const radius = (Number(pointer.getAttribute('r')) || 8) > 0 ? (el.getBoundingClientRect().width / 2 - 5) : 50;
+        const a = hue * Math.PI / 180;
+        const r = Math.min(1, sat);
+        const px = Math.cos(a) * radius * r;
+        const py = Math.sin(a) * radius * r;
+        pointer.setAttribute('cx', String(px));
+        pointer.setAttribute('cy', String(py));
+      }
+
+      // Restore all state from a preset's params object.
+      function applyPresetToState(params: any) {
+        if (!params) return;
+        // 1. Restore all scalar sliders via the existing helper.
+        for (const k of PRESET_SLIDER_KEYS) {
+          if (k in params) setSliderValue(k, Number(params[k]) || 0);
+        }
+        // 2. Restore extra scalar keys (also via setSliderValue if it's a slider,
+        // otherwise just write into state and update any visible label).
+        for (const k of PRESET_EXTRA_KEYS) {
+          if (!(k in params)) continue;
+          const val = params[k];
+          if (typeof val === 'number') {
+            (state as any)[k] = val;
+            // Update its DOM slider if it exists
+            const wrap = document.querySelector('.slider[data-key="' + k + '"]');
+            if (wrap) {
+              const inp = wrap.querySelector('input'); if (inp) inp.value = String(val);
+              const v = wrap.querySelector('.val');    if (v) v.textContent = String(val);
+            }
+            // Update HSL row labels if it's an HSL slider we missed above
+            if (k.startsWith('hsl_')) {
+              const range = k.slice(4);
+              const row = document.querySelector('.cg-hsl-row[data-range="' + range + '"]');
+              if (row) {
+                const hSpan = row.querySelector('.cg-hsl-val.h');
+                if (hSpan) hSpan.textContent = String(Math.round(val));
+              }
+            }
+          } else if (Array.isArray(val)) {
+            // e.g. CG colours stored as [r,g,b]
+            (state as any)[k] = val;
+          }
+        }
+        // 3. Restore HSL ranges from {h, s, l} objects: write the slider labels and hidden inputs.
+        for (const range of HSL_RANGES_LIST) {
+          const v = params['hsl_' + range];
+          if (v && typeof v === 'object') {
+            (state as any)['hsl_' + range] = { h: v.h || 0, s: v.s || 0, l: v.l || 0 };
+            const row = document.querySelector('.cg-hsl-row[data-range="' + range + '"]');
+            if (row) {
+              const hInput = row.querySelector('input[data-channel="h"]') as HTMLInputElement | null;
+              const sInput = row.querySelector('input[data-channel="s"]') as HTMLInputElement | null;
+              const lInput = row.querySelector('input[data-channel="l"]') as HTMLInputElement | null;
+              if (hInput) hInput.value = String(Math.round(v.h || 0));
+              if (sInput) sInput.value = String(Math.round(v.s || 0));
+              if (lInput) lInput.value = String(Math.round(v.l || 0));
+              const hSpan = row.querySelector('.cg-hsl-val.h'); if (hSpan) hSpan.textContent = String(Math.round(v.h || 0));
+              const sSpan = row.querySelector('.cg-hsl-val.s'); if (sSpan) sSpan.textContent = String(Math.round(v.s || 0));
+              const lSpan = row.querySelector('.cg-hsl-val.l'); if (lSpan) lSpan.textContent = String(Math.round(v.l || 0));
+            }
+          }
+        }
+        // 4. Move wheel pointers to match restored state.
+        // CG colours: convert [r,g,b] → hue/sat, move pointer
+        const CG_WHEELS = [
+          { id: 'cw-cg-shadows-colour', key: 'cg_shadows_colour' },
+          { id: 'cw-cg-midtones-colour', key: 'cg_midtones_colour' },
+          { id: 'cw-cg-highlights-colour', key: 'cg_highlights_colour' },
+          { id: 'cw-cg-global-colour', key: 'cg_global_colour' },
+        ];
+        for (const w of CG_WHEELS) {
+          const c = (state as any)[w.key];
+          if (Array.isArray(c)) {
+            const hsl = rgb2hsl255(c[0] ?? 128, c[1] ?? 128, c[2] ?? 128);
+            setWheelPointer(w.id, hsl.h, hsl.s / 100);
+          }
+        }
+        // ST wheels
+        const ST_WHEELS = [
+          { id: 'cw-st-shadows', h: 'st_shadows_hue', s: 'st_shadows_saturation' },
+          { id: 'cw-st-highlights', h: 'st_highlights_hue', s: 'st_highlights_saturation' },
+        ];
+        for (const w of ST_WHEELS) {
+          const hue = (state as any)[w.h] ?? 0;
+          const sat = (state as any)[w.s] ?? 0;
+          setWheelPointer(w.id, hue, sat / 100);
+        }
+        // HSL wheels: convert slider {h,s,l} back to wheel position
+        const HSL_RANGES: Record<string, number> = {
+          red: 0, orange: 30, yellow: 60, green: 120,
+          aqua: 180, blue: 240, purple: 270, magenta: 300,
+        };
+        for (const range of HSL_RANGES_LIST) {
+          const k = 'hsl_' + range;
+          const v = (state as any)[k] || { h: 0, s: 0 };
+          const centre = HSL_RANGES[range] ?? 0;
+          const angle = (centre + (v.h || 0) * 1.8 + 360) % 360;
+          setWheelPointer('cw-hsl-' + range, angle, (v.s || 0) / 100);
+        }
+        // 5. Restore tone curve.
+        if (params.curve && typeof params.curve === 'object') {
+          const cv = (window as any)._cvData;
+          if (cv) {
+            ['rgb', 'r', 'g', 'b'].forEach((ch) => {
+              if (Array.isArray(params.curve[ch])) {
+                cv[ch] = params.curve[ch].filter((p: any) =>
+                  Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1])
+                );
+                // Ensure at least the anchor endpoints exist
+                if (cv[ch].length === 0 || cv[ch][0][0] !== 0) cv[ch].unshift([0, 0]);
+                if (cv[ch][cv[ch].length - 1][0] !== 255) cv[ch].push([255, 255]);
+                cv[ch].sort((a: any, b: any) => a[0] - b[0]);
+              }
+            });
+            // Restore the active channel BEFORE calling _cvSync — otherwise _cvSync's
+            // mirror block clobbers per-channel edits with the identity rgb curve.
+            if (params.curveCh && typeof (window as any).setCvCh === 'function') {
+              (window as any).setCvCh(params.curveCh);
+            }
+            if (typeof (window as any)._cvSync === 'function') (window as any)._cvSync();
+            if (typeof (window as any)._cvRefresh === 'function') (window as any)._cvRefresh();
+          }
+        }
+        // 6. LUT — set the dropdown and (async) load the data.
+        const newLutId = params.lut_id ? Number(params.lut_id) : 0;
+        state.lut_id = newLutId;
+        const lutSelEl = document.getElementById('lut-select');
+        if (lutSelEl) lutSelEl.value = newLutId ? String(newLutId) : '';
+        if (newLutId) {
+          fetchLutData(newLutId).then((d) => {
+            activeLut = d;
+            _sharpenCacheKey = -1;
+            applyVignetteOverlay();
+            draw();
+          }).catch(() => { activeLut = null; });
+        } else {
+          activeLut = null;
+        }
+        applyVignetteOverlay();
+        _sharpenCacheKey = -1;
+        draw();
+        setStatus('Preset loaded');
+      }
 
       // ---- Sliders ----
 
@@ -2854,6 +2953,17 @@ webglPipeline.render();
     _cvSync(); _cvRefresh();
   }
   (window as any)._cvReset = _cvReset;
+  (window as any)._cvSync = _cvSync;
+  (window as any)._cvRefresh = _cvRefresh;
+  (window as any)._cvAddPt = _cvAddPt;
+  (window as any)._cvReset = _cvReset;
+  (window as any)._cvCh = (): CVCh => _cvCh;
+  (window as any).setCvCh = (ch: CVCh) => {
+    _cvCh = ch;
+    document.querySelectorAll('.ch-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector('.ch-tab[data-cvch="' + ch + '"]')?.classList.add('active');
+    _cvRefresh();
+  };
 
   function _cvInit() {
     const svg = document.getElementById('cv-svg') as SVGSVGElement | null;

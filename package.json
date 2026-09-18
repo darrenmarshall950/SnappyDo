@@ -6,7 +6,7 @@
   "description": "A website builder for photographers — Framer-grade design + native photo-business features",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "npm run build:js && astro build",
     "preview": "astro preview",
     "start": "node ./dist/server/entry.mjs",
     "test": "echo 'no tests yet' && exit 0",
@@ -15,7 +15,8 @@
     "docker:build": "docker compose build",
     "docker:up": "docker compose up",
     "docker:logs": "docker compose logs -f",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "build:js": "esbuild src/lib/editor-gl.ts --outfile=public/_webgl-pipeline.js --format=esm --target=es2020 && esbuild src/lib/editor.ts --outfile=public/editor.js --format=iife --target=es2020 --bundle"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.4",
@@ -34,6 +35,7 @@
     "@types/better-sqlite3": "^7.6.11",
     "@types/busboy": "^1.5.4",
     "@types/node": "^22.7.5",
+    "esbuild": "^0.24.2",
     "typescript": "^5.6.3"
   },
   "engines": {

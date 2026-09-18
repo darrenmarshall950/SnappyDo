@@ -84,6 +84,9 @@
     const result = await _drawPipelineLoading;
     webglPipeline = result;
     window._webgl = webglPipeline;
+    window.state = state;
+    window.draw = draw;
+    window.scheduleDraw = typeof scheduleDraw === "function" ? scheduleDraw : draw;
     return webglPipeline;
   }
   var state = { ...initialParams };
@@ -1242,6 +1245,7 @@
         sel.appendChild(opt);
       }
       window.__snappydoPresets = presets;
+      if (typeof updateDeletePresetButton === "function") updateDeletePresetButton();
     } catch (e) {
       console.warn("loadPresets failed", e);
     }
@@ -1297,22 +1301,9 @@
     }
     return cached;
   }
-  function updateDeleteLutButton() {
-    const btn = document.getElementById("btn-delete-lut");
-    if (!btn) return;
-    const sel = document.getElementById("lut-select");
-    const v = sel ? sel.value : "";
-    if (!v) {
-      btn.style.display = "none";
-      return;
-    }
-    const meta = (window.__snappydoLuts || []).find((x) => String(x.id) === String(v));
-    btn.style.display = meta && meta.kind === "synthesised" ? "inline-flex" : "none";
-  }
   var lutSelect = document.getElementById("lut-select");
   if (lutSelect) {
     lutSelect.addEventListener("change", async () => {
-      updateDeleteLutButton();
       const v = lutSelect.value;
       state.lut_id = v ? Number(v) : 0;
       if (state.lut_id) {
@@ -1326,9 +1317,6 @@
         try {
           activeLut = await fetchLutData(state.lut_id);
           const meta = (window.__snappydoLuts || []).find((x) => Number(x.id) === state.lut_id);
-          if (meta && meta.synth_params) {
-            applySynthParams(meta.synth_params);
-          }
         } catch (e) {
           setStatus("Failed to load LUT.", true);
           state.lut_id = 0;
@@ -1341,118 +1329,22 @@
       draw();
     });
   }
-  function applySynthParams(params) {
-    if (!params || typeof params !== "object") return;
-    const LOOK_KEYS = ["exposure", "brightness", "contrast", "saturation", "temp", "tint"];
-    for (const k of LOOK_KEYS) {
-      if (typeof params[k] === "number" && Number.isFinite(params[k])) {
-        state[k] = params[k];
-        const wrap = document.querySelector('.slider[data-key="' + k + '"]');
-        if (wrap) {
-          const inp = wrap.querySelector("input");
-          const val = wrap.querySelector(".val");
-          if (inp) inp.value = String(params[k]);
-          if (val) val.textContent = String(params[k]);
-        }
-      }
+  function updateDeletePresetButton() {
+    const btn = document.getElementById("btn-delete-preset");
+    const sel = document.getElementById("preset-select");
+    if (!btn || !sel) return;
+    const v = sel.value;
+    if (!v) {
+      btn.style.display = "none";
+      return;
     }
-    setStatus("LUT sliders restored.");
-  }
-  var btnSaveLut = document.getElementById("btn-save-lut");
-  var btnDeleteLut = document.getElementById("btn-delete-lut");
-  if (btnDeleteLut) {
-    btnDeleteLut.addEventListener("click", async () => {
-      const sel = document.getElementById("lut-select");
-      if (!sel || !sel.value) return;
-      const meta = (window.__snappydoLuts || []).find((x) => String(x.id) === String(sel.value));
-      if (!meta || meta.kind !== "synthesised") return;
-      if (!confirm('Delete "' + meta.name + '"? This cannot be undone.')) return;
-      btnDeleteLut.disabled = true;
-      const originalText = btnDeleteLut.textContent;
-      btnDeleteLut.textContent = "Deleting\u2026";
-      try {
-        const res = await fetch("/api/luts/" + meta.id, {
-          method: "DELETE",
-          credentials: "same-origin"
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: "delete failed" }));
-          setStatus("Delete LUT failed: " + (err.error || res.status), true);
-          return;
-        }
-        await loadLuts();
-        sel.value = "";
-        state.lut_id = 0;
-        activeLut = null;
-        updateDeleteLutButton();
-        draw();
-        setStatus('Deleted "' + meta.name + '".');
-      } catch (e) {
-        setStatus("Delete LUT error: " + (e?.message || String(e)), true);
-      } finally {
-        btnDeleteLut.disabled = false;
-        btnDeleteLut.textContent = originalText;
-      }
-    });
-  }
-  if (btnSaveLut) {
-    btnSaveLut.addEventListener("click", async () => {
-      const defaultName = state.lut_id ? (window.__snappydoLuts || []).find((x) => Number(x.id) === state.lut_id)?.name || "My LUT" : "My LUT";
-      const name = prompt("Name for the new LUT:", defaultName + " (edited)");
-      if (!name || !name.trim()) return;
-      const LOOK_KEYS = ["exposure", "brightness", "contrast", "saturation", "temp", "tint"];
-      const params = {};
-      for (const k of LOOK_KEYS) {
-        if (typeof state[k] === "number") {
-          params[k] = state[k];
-        }
-      }
-      btnSaveLut.disabled = true;
-      const originalText = btnSaveLut.textContent;
-      btnSaveLut.textContent = "Saving\u2026";
-      try {
-        const res = await fetch("/api/luts/synth", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: name.trim(),
-            params,
-            base_lut_id: state.lut_id || null
-          })
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: "save failed" }));
-          setStatus("Save LUT failed: " + (err.error || res.status), true);
-          return;
-        }
-        const json = await res.json();
-        await loadLuts();
-        if (json.lut && json.lut.id) {
-          lutSelect.value = String(json.lut.id);
-          state.lut_id = json.lut.id;
-          activeLut = await fetchLutData(json.lut.id);
-          updateDeleteLutButton();
-          draw();
-        }
-        const flag = document.getElementById("lut-saved-flag");
-        if (flag) {
-          flag.textContent = "Saved!";
-          flag.style.display = "inline";
-          setTimeout(() => {
-            flag.style.display = "none";
-          }, 2e3);
-        }
-      } catch (e) {
-        setStatus("Save LUT error: " + (e?.message || String(e)), true);
-      } finally {
-        btnSaveLut.disabled = false;
-        btnSaveLut.textContent = originalText;
-      }
-    });
+    const meta = (window.__snappydoPresets || []).find((x) => String(x.id) === String(v));
+    btn.style.display = meta && meta.kind === "user" ? "inline-flex" : "none";
   }
   var presetSelect = document.getElementById("preset-select");
   if (presetSelect) {
     presetSelect.addEventListener("change", () => {
+      updateDeletePresetButton();
       const id = Number(presetSelect.value);
       if (!id) return;
       const p = (window.__snappydoPresets || []).find((x) => x.id === id);
@@ -1460,28 +1352,40 @@
       applyPresetToState(p.params);
     });
   }
-  function applyPresetToState(params) {
-    if (!params) return;
-    for (const k of PRESET_SLIDER_KEYS) {
-      if (k in params) setSliderValue(k, Number(params[k]) || 0);
-    }
-    const newLutId = params.lut_id ? Number(params.lut_id) : 0;
-    state.lut_id = newLutId;
-    const lutSelEl = document.getElementById("lut-select");
-    if (lutSelEl) lutSelEl.value = newLutId ? String(newLutId) : "";
-    if (newLutId) {
-      fetchLutData(newLutId).then((d) => {
-        activeLut = d;
-        draw();
-      }).catch(() => {
-        activeLut = null;
-      });
-    } else {
-      activeLut = null;
-    }
-    applyVignetteOverlay();
-    _sharpenCacheKey = -1;
-    draw();
+  var btnDeletePreset = document.getElementById("btn-delete-preset");
+  if (btnDeletePreset) {
+    btnDeletePreset.addEventListener("click", async () => {
+      const sel = document.getElementById("preset-select");
+      if (!sel) return;
+      const meta = (window.__snappydoPresets || []).find((x) => String(x.id) === String(sel.value));
+      if (!meta || meta.kind !== "user") return;
+      if (!confirm('Delete preset "' + meta.name + '"? This cannot be undone.')) return;
+      btnDeletePreset.disabled = true;
+      const original = btnDeletePreset.textContent;
+      btnDeletePreset.textContent = "Deleting\u2026";
+      try {
+        const res = await fetch("/api/presets/" + meta.id, {
+          method: "DELETE",
+          credentials: "same-origin"
+        });
+        if (res.status === 204) {
+          setStatus("Preset deleted: " + meta.name);
+          sel.value = "";
+          await loadPresets();
+          updateDeletePresetButton();
+        } else if (res.status === 403) {
+          setStatus("Cannot delete built-in preset", true);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setStatus("Delete preset failed: " + (err.error || res.status), true);
+        }
+      } catch (e) {
+        setStatus("Delete preset error: " + (e?.message || String(e)), true);
+      } finally {
+        btnDeletePreset.disabled = false;
+        btnDeletePreset.textContent = original;
+      }
+    });
   }
   var btnSavePreset = document.getElementById("btn-save-preset");
   if (btnSavePreset) {
@@ -1490,8 +1394,7 @@
       if (!name) return;
       btnSavePreset.disabled = true;
       try {
-        const snapshot = { lut_id: state.lut_id || 0, lut_intensity: state.lut_intensity || 0 };
-        for (const k of PRESET_SLIDER_KEYS) snapshot[k] = state[k] || 0;
+        const snapshot = snapshotPreset();
         const res = await fetch("/api/presets", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1504,6 +1407,7 @@
         }
         setStatus("Preset saved: " + name, false);
         await loadPresets();
+        if (typeof updateDeletePresetButton === "function") updateDeletePresetButton();
       } finally {
         btnSavePreset.disabled = false;
       }
@@ -1522,6 +1426,203 @@
       });
     }
   });
+  var PRESET_EXTRA_KEYS = [
+    // Split Toning
+    "st_balance",
+    "st_shadows_hue",
+    "st_shadows_saturation",
+    "st_highlights_hue",
+    "st_highlights_saturation",
+    // Color Grading colours + mode
+    "cg_mode",
+    "cg_shadows_colour",
+    "cg_midtones_colour",
+    "cg_highlights_colour",
+    "cg_global_colour",
+    // HSL ranges
+    "hsl_red",
+    "hsl_orange",
+    "hsl_yellow",
+    "hsl_green",
+    "hsl_aqua",
+    "hsl_blue",
+    "hsl_purple",
+    "hsl_magenta",
+    // Grain + dehaze
+    "grain_amount",
+    "grain_size",
+    "dehaze"
+  ];
+  var HSL_RANGES_LIST = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"];
+  function snapshotPreset() {
+    const snapshot = {};
+    const all = [];
+    all.push(...typeof PRESET_SLIDER_KEYS !== "undefined" ? PRESET_SLIDER_KEYS : []);
+    all.push(...PRESET_EXTRA_KEYS);
+    for (const k of all) {
+      if (k in state && state[k] !== void 0) {
+        snapshot[k] = state[k];
+      }
+    }
+    snapshot.lut_id = state.lut_id || 0;
+    snapshot.lut_intensity = state.lut_intensity || 0;
+    const cv = window._cvData;
+    if (cv && cv.rgb && cv.r && cv.g && cv.b) {
+      snapshot.curve = {
+        rgb: cv.rgb.map((p) => [p[0], p[1]]),
+        r: cv.r.map((p) => [p[0], p[1]]),
+        g: cv.g.map((p) => [p[0], p[1]]),
+        b: cv.b.map((p) => [p[0], p[1]])
+      };
+    }
+    if (typeof window._cvCh === "function") {
+      snapshot.curveCh = window._cvCh();
+    }
+    return snapshot;
+  }
+  function setWheelPointer(wheelId, hue, sat) {
+    const el = document.getElementById(wheelId);
+    if (!el) return;
+    const pointer = el.querySelector(".cw-pointer");
+    if (!pointer) return;
+    const radius = (Number(pointer.getAttribute("r")) || 8) > 0 ? el.getBoundingClientRect().width / 2 - 5 : 50;
+    const a = hue * Math.PI / 180;
+    const r = Math.min(1, sat);
+    const px = Math.cos(a) * radius * r;
+    const py = Math.sin(a) * radius * r;
+    pointer.setAttribute("cx", String(px));
+    pointer.setAttribute("cy", String(py));
+  }
+  function applyPresetToState(params) {
+    if (!params) return;
+    for (const k of PRESET_SLIDER_KEYS) {
+      if (k in params) setSliderValue(k, Number(params[k]) || 0);
+    }
+    for (const k of PRESET_EXTRA_KEYS) {
+      if (!(k in params)) continue;
+      const val = params[k];
+      if (typeof val === "number") {
+        state[k] = val;
+        const wrap = document.querySelector('.slider[data-key="' + k + '"]');
+        if (wrap) {
+          const inp = wrap.querySelector("input");
+          if (inp) inp.value = String(val);
+          const v = wrap.querySelector(".val");
+          if (v) v.textContent = String(val);
+        }
+        if (k.startsWith("hsl_")) {
+          const range = k.slice(4);
+          const row = document.querySelector('.cg-hsl-row[data-range="' + range + '"]');
+          if (row) {
+            const hSpan = row.querySelector(".cg-hsl-val.h");
+            if (hSpan) hSpan.textContent = String(Math.round(val));
+          }
+        }
+      } else if (Array.isArray(val)) {
+        state[k] = val;
+      }
+    }
+    for (const range of HSL_RANGES_LIST) {
+      const v = params["hsl_" + range];
+      if (v && typeof v === "object") {
+        state["hsl_" + range] = { h: v.h || 0, s: v.s || 0, l: v.l || 0 };
+        const row = document.querySelector('.cg-hsl-row[data-range="' + range + '"]');
+        if (row) {
+          const hInput = row.querySelector('input[data-channel="h"]');
+          const sInput = row.querySelector('input[data-channel="s"]');
+          const lInput = row.querySelector('input[data-channel="l"]');
+          if (hInput) hInput.value = String(Math.round(v.h || 0));
+          if (sInput) sInput.value = String(Math.round(v.s || 0));
+          if (lInput) lInput.value = String(Math.round(v.l || 0));
+          const hSpan = row.querySelector(".cg-hsl-val.h");
+          if (hSpan) hSpan.textContent = String(Math.round(v.h || 0));
+          const sSpan = row.querySelector(".cg-hsl-val.s");
+          if (sSpan) sSpan.textContent = String(Math.round(v.s || 0));
+          const lSpan = row.querySelector(".cg-hsl-val.l");
+          if (lSpan) lSpan.textContent = String(Math.round(v.l || 0));
+        }
+      }
+    }
+    const CG_WHEELS = [
+      { id: "cw-cg-shadows-colour", key: "cg_shadows_colour" },
+      { id: "cw-cg-midtones-colour", key: "cg_midtones_colour" },
+      { id: "cw-cg-highlights-colour", key: "cg_highlights_colour" },
+      { id: "cw-cg-global-colour", key: "cg_global_colour" }
+    ];
+    for (const w of CG_WHEELS) {
+      const c = state[w.key];
+      if (Array.isArray(c)) {
+        const hsl = rgb2hsl255(c[0] ?? 128, c[1] ?? 128, c[2] ?? 128);
+        setWheelPointer(w.id, hsl.h, hsl.s / 100);
+      }
+    }
+    const ST_WHEELS = [
+      { id: "cw-st-shadows", h: "st_shadows_hue", s: "st_shadows_saturation" },
+      { id: "cw-st-highlights", h: "st_highlights_hue", s: "st_highlights_saturation" }
+    ];
+    for (const w of ST_WHEELS) {
+      const hue = state[w.h] ?? 0;
+      const sat = state[w.s] ?? 0;
+      setWheelPointer(w.id, hue, sat / 100);
+    }
+    const HSL_RANGES = {
+      red: 0,
+      orange: 30,
+      yellow: 60,
+      green: 120,
+      aqua: 180,
+      blue: 240,
+      purple: 270,
+      magenta: 300
+    };
+    for (const range of HSL_RANGES_LIST) {
+      const k = "hsl_" + range;
+      const v = state[k] || { h: 0, s: 0 };
+      const centre = HSL_RANGES[range] ?? 0;
+      const angle = (centre + (v.h || 0) * 1.8 + 360) % 360;
+      setWheelPointer("cw-hsl-" + range, angle, (v.s || 0) / 100);
+    }
+    if (params.curve && typeof params.curve === "object") {
+      const cv = window._cvData;
+      if (cv) {
+        ["rgb", "r", "g", "b"].forEach((ch) => {
+          if (Array.isArray(params.curve[ch])) {
+            cv[ch] = params.curve[ch].filter(
+              (p) => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1])
+            );
+            if (cv[ch].length === 0 || cv[ch][0][0] !== 0) cv[ch].unshift([0, 0]);
+            if (cv[ch][cv[ch].length - 1][0] !== 255) cv[ch].push([255, 255]);
+            cv[ch].sort((a, b) => a[0] - b[0]);
+          }
+        });
+        if (params.curveCh && typeof window.setCvCh === "function") {
+          window.setCvCh(params.curveCh);
+        }
+        if (typeof window._cvSync === "function") window._cvSync();
+        if (typeof window._cvRefresh === "function") window._cvRefresh();
+      }
+    }
+    const newLutId = params.lut_id ? Number(params.lut_id) : 0;
+    state.lut_id = newLutId;
+    const lutSelEl = document.getElementById("lut-select");
+    if (lutSelEl) lutSelEl.value = newLutId ? String(newLutId) : "";
+    if (newLutId) {
+      fetchLutData(newLutId).then((d) => {
+        activeLut = d;
+        _sharpenCacheKey = -1;
+        applyVignetteOverlay();
+        draw();
+      }).catch(() => {
+        activeLut = null;
+      });
+    } else {
+      activeLut = null;
+    }
+    applyVignetteOverlay();
+    _sharpenCacheKey = -1;
+    draw();
+    setStatus("Preset loaded");
+  }
   function setNestedState(state2, key, value) {
     if (key.includes(".")) {
       const parts = key.split(".");
@@ -2481,6 +2582,17 @@
     _cvRefresh();
   }
   window._cvReset = _cvReset;
+  window._cvSync = _cvSync;
+  window._cvRefresh = _cvRefresh;
+  window._cvAddPt = _cvAddPt;
+  window._cvReset = _cvReset;
+  window._cvCh = () => _cvCh;
+  window.setCvCh = (ch) => {
+    _cvCh = ch;
+    document.querySelectorAll(".ch-tab").forEach((t) => t.classList.remove("active"));
+    document.querySelector('.ch-tab[data-cvch="' + ch + '"]')?.classList.add("active");
+    _cvRefresh();
+  };
   function _cvInit() {
     const svg = document.getElementById("cv-svg");
     if (!svg) return;
