@@ -2084,8 +2084,10 @@
     const y = Math.max(0, Math.min(255, Math.round((sy - 10) * 255 / 200)));
     _cvData[_cvCh].push([x, y]);
     _cvData[_cvCh].sort((a, b) => a[0] - b[0]);
+    const idx = _cvData[_cvCh].findIndex(([px, py]) => px === x && py === y);
     _cvSync();
     _cvRefresh();
+    return idx;
   }
   function _cvRmPt(idx) {
     if (_cvData[_cvCh].length <= 2) return;
@@ -2119,8 +2121,12 @@
           break;
         }
       }
-      if (hit >= 0) _cvDrag = { idx: hit };
-      else _cvAddPt(sx, sy);
+      if (hit >= 0) {
+        _cvDrag = { idx: hit };
+      } else {
+        const newIdx = _cvAddPt(sx, sy);
+        if (newIdx >= 0) _cvDrag = { idx: newIdx };
+      }
     });
     window.addEventListener("mousemove", (e) => {
       if (!_cvDrag) return;
