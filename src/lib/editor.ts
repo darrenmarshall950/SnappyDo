@@ -2796,13 +2796,15 @@ webglPipeline.render();
     // mirror its curve into the R/G/B channels. If the user later switches to
     // a per-channel mode and edits, the master rgb data is unused for that
     // channel (r/g/b keep their own per-channel curves).
-    let r = _cvData.r, g = _cvData.g, b = _cvData.b;
+    //
+    // IMPORTANT: also MUTATE _cvData.r/g/b so subsequent draw() calls (e.g.
+    // from slider tweaks) see the mirrored data and don't revert to flat.
     if (_cvCh === "rgb") {
-      r = _cvData.rgb;
-      g = _cvData.rgb;
-      b = _cvData.rgb;
+      _cvData.r = _cvData.rgb.slice();
+      _cvData.g = _cvData.rgb.slice();
+      _cvData.b = _cvData.rgb.slice();
     }
-    pipe.setCurves({ rgb: _cvData.rgb, r, g, b });
+    pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
     pipe.render();
   }
 

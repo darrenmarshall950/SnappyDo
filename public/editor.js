@@ -2419,13 +2419,12 @@
   function _cvSync() {
     const pipe = window._webgl;
     if (!pipe?.ready) return;
-    let r = _cvData.r, g = _cvData.g, b = _cvData.b;
     if (_cvCh === "rgb") {
-      r = _cvData.rgb;
-      g = _cvData.rgb;
-      b = _cvData.rgb;
+      _cvData.r = _cvData.rgb.slice();
+      _cvData.g = _cvData.rgb.slice();
+      _cvData.b = _cvData.rgb.slice();
     }
-    pipe.setCurves({ rgb: _cvData.rgb, r, g, b });
+    pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
     pipe.render();
   }
   function _cvRefresh() {
