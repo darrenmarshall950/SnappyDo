@@ -1491,6 +1491,18 @@
     const lutSel = document.getElementById("lut-select");
     if (lutSel) lutSel.value = "";
     activeLut = null;
+    if (typeof window._cvReset === "function") window._cvReset();
+    resetKeys([
+      "dehaze",
+      "st_shadows_hue",
+      "st_shadows_saturation",
+      "st_highlights_hue",
+      "st_highlights_saturation",
+      "st_balance",
+      "grain_amount",
+      "grain_size"
+    ]);
+    resetCgKeys();
     draw();
   };
   document.getElementById("btn-reset-light").onclick = () => resetKeys(["exposure", "contrast", "brightness"]);
