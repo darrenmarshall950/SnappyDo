@@ -656,7 +656,19 @@
         cropX: 0,
         cropY: 0,
         cropW: 0,
-        cropH: 0
+        cropH: 0,
+        dehaze: 0,
+        lens_corrections: { enabled: false, remove_baseline_exposure: 0, chromatic_aberration: 0, chromatic_aberration_x: 0, chromatic_aberration_y: 0 },
+        calibration: { shadow_tint: 0, saturation: 0 }
+      });
+      webglPipeline.setGrain({ amount: 0, size: 25 });
+      webglPipeline.setSplitToning({ shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 });
+      webglPipeline.setHsl({}, null);
+      webglPipeline.setCurves({
+        rgb: [[0, 0], [255, 255]],
+        r: [[0, 0], [255, 255]],
+        g: [[0, 0], [255, 255]],
+        b: [[0, 0], [255, 255]]
       });
       webglPipeline.render();
       return true;

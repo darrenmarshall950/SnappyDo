@@ -431,12 +431,14 @@ void main() {
 
   // \u2500\u2500 Grain (Lightroom-style: subtle, shadow-biased, size affects particle scale not intensity) \u2500\u2500
   if (uGrainAmount > 0.0) {
-    // Size controls grain particle scale: 1 px at size=0, up to 4 px at size=100.
-    // Larger particles are produced by quantising the noise position to a coarser grid.
-    float grainScale = 1.0 + uGrainSize / 33.333;
+    // Size controls grain particle scale: size=0 \u2192 1 px particles, size=100 \u2192 ~4 px particles.
+    // Round to nearest INTEGER block size so every pixel lands cleanly in a bucket \u2014 non-integer
+    // scales cause inconsistent bucket widths and produce visible bands/stripes across the image.
+    float grainScale = max(1.0, floor(1.0 + uGrainSize / 33.333 + 0.5));
     vec2 grainPx = floor(vUv / uTexelSize / grainScale);
     float seed = dot(grainPx, vec2(12.9898, 78.233)) + uTime;
-    float noise = fract(sin(seed) * 43758.5453) - 0.5;
+    // Hash the seed to break up any low-frequency banding from the sin() pattern
+    float noise = fract(sin(seed) * 43758.5453 + sin(seed * 1.731) * 12345.6789) - 0.5;
     // Luma weighting: more grain in shadows/midtones, less in highlights (Lightroom behaviour)
     float luma = dot(c, vec3(0.299, 0.587, 0.114));
     float grainWeight = mix(1.0, 0.35, luma);
