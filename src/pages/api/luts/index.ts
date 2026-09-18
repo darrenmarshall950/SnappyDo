@@ -31,9 +31,16 @@ export const GET: APIRoute = async () => {
     builtin_key: r.builtin_key,
     size: r.size,
     enabled_global: r.enabled_global,
+    synth_params: r.kind === 'synthesised' && r.synth_params_json
+      ? safeParseJson(r.synth_params_json)
+      : null,
   }));
   return json({ luts: rows });
 };
+
+function safeParseJson(s: string): Record<string, any> | null {
+  try { return JSON.parse(s); } catch { return null; }
+}
 
 export const POST: APIRoute = async ({ request }) => {
   const session = readAdminSession(request);

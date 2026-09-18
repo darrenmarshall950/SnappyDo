@@ -1588,7 +1588,7 @@ webglPipeline.render();
         return cached;
       }
 
-      // LUT select change → fetch + activate
+      // LUT select change → fetch + activate, and restore saved slider params if synthesised
       const lutSelect = document.getElementById('lut-select');
       if (lutSelect) {
         lutSelect.addEventListener('change', async () => {
@@ -1606,6 +1606,12 @@ webglPipeline.render();
             }
             try {
               activeLut = await fetchLutData(state.lut_id);
+
+              // If this LUT was synthesised from sliders, restore those sliders.
+              const meta = (window.__snappydoLuts || []).find((x: any) => Number(x.id) === state.lut_id);
+              if (meta && meta.synth_params) {
+                applySynthParams(meta.synth_params);
+              }
             } catch (e) {
               setStatus('Failed to load LUT.', true);
               state.lut_id = 0;
@@ -1616,6 +1622,87 @@ webglPipeline.render();
             activeLut = null;
           }
           draw();
+        });
+      }
+
+      // Apply synth_params to sliders + state. The baked cube data already encodes
+      // these values, but moving the visible sliders lets the user see/edit them.
+      function applySynthParams(params: Record<string, number>) {
+        if (!params || typeof params !== 'object') return;
+        const LOOK_KEYS = ['exposure','brightness','contrast','saturation','temp','tint'];
+        for (const k of LOOK_KEYS) {
+          if (typeof params[k] === 'number' && Number.isFinite(params[k])) {
+            (state as any)[k] = params[k];
+            const wrap = document.querySelector('.slider[data-key="' + k + '"]');
+            if (wrap) {
+              const inp = wrap.querySelector('input') as HTMLInputElement | null;
+              const val = wrap.querySelector('.val');
+              if (inp) inp.value = String(params[k]);
+              if (val) val.textContent = String(params[k]);
+            }
+          }
+        }
+        setStatus('LUT sliders restored.');
+      }
+
+      // Wire the Save LUT button
+      const btnSaveLut = document.getElementById('btn-save-lut');
+      if (btnSaveLut) {
+        btnSaveLut.addEventListener('click', async () => {
+          const defaultName = state.lut_id
+            ? ((window.__snappydoLuts || []).find((x: any) => Number(x.id) === state.lut_id)?.name || 'My LUT')
+            : 'My LUT';
+          const name = prompt('Name for the new LUT:', defaultName + ' (edited)');
+          if (!name || !name.trim()) return;
+
+          // Collect look sliders (the ones applySlidersToRgb supports)
+          const LOOK_KEYS = ['exposure','brightness','contrast','saturation','temp','tint'];
+          const params: Record<string, number> = {};
+          for (const k of LOOK_KEYS) {
+            if (typeof (state as any)[k] === 'number') {
+              params[k] = (state as any)[k];
+            }
+          }
+
+          btnSaveLut.disabled = true;
+          const originalText = btnSaveLut.textContent;
+          btnSaveLut.textContent = 'Saving…';
+          try {
+            const res = await fetch('/api/luts/synth', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: name.trim(),
+                params,
+                base_lut_id: state.lut_id || null,
+              }),
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({ error: 'save failed' }));
+              setStatus('Save LUT failed: ' + (err.error || res.status), true);
+              return;
+            }
+            const json = await res.json();
+            await loadLuts(); // refresh dropdown
+            if (json.lut && json.lut.id) {
+              lutSelect.value = String(json.lut.id);
+              state.lut_id = json.lut.id;
+              activeLut = await fetchLutData(json.lut.id);
+              draw();
+            }
+            // Flash "Saved!" flag
+            const flag = document.getElementById('lut-saved-flag');
+            if (flag) {
+              flag.textContent = 'Saved!';
+              flag.style.display = 'inline';
+              setTimeout(() => { flag.style.display = 'none'; }, 2000);
+            }
+          } catch (e: any) {
+            setStatus('Save LUT error: ' + (e?.message || String(e)), true);
+          } finally {
+            btnSaveLut.disabled = false;
+            btnSaveLut.textContent = originalText;
+          }
         });
       }
 

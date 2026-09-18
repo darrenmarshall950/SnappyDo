@@ -634,6 +634,10 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
       }
       .preset-row .select { flex: 1 1 auto; min-width: 0; }
       .preset-row .btn { flex: 0 0 auto; padding: 0.4rem 0.7rem; font-size: 0.85rem; }
+    .lut-actions { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; }
+    .lut-actions .btn { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
+    .lut-saved-flag { color: #86efac; font-size: 0.75rem; opacity: 0; transition: opacity 0.2s; }
+    .lut-saved-flag.visible { opacity: 1; }
       .select {
         font: inherit;
         font-size: 0.9rem;
@@ -850,12 +854,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           <select id="lut-select" class="select select--block">
             <option value="">No LUT</option>
           </select>
+          <div class="lut-actions">
+            <button class="btn btn--ghost" id="btn-save-lut" type="button" title="Bake current sliders + LUT into a new LUT you can reload later">Save LUT</button>
+            <span class="lut-saved-flag" id="lut-saved-flag" style="display:none">Saved!</span>
+          </div>
           <div class="slider" data-key="lut_intensity" id="slider-lut-intensity">
             <label>Intensity</label>
             <input type="range" min="0" max="100" step="1" />
             <span class="val">0</span>
           </div>
-          <p class="hint">Built-in looks available to all accounts. Upload more from the admin panel.</p>
+          <p class="hint">Built-in looks available to all accounts. Use "Save LUT" to bake current sliders into a new LUT. Saved LUTs restore their sliders on load.</p>
         </section>
 
         <section class="panel-section">
