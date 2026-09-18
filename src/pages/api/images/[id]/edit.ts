@@ -39,7 +39,7 @@ import { readAdminSession } from '../../../../lib/auth';
 import { imgproxyUrl } from '../../../../lib/imgproxy';
 import { buildDarktableXmp, readCameraWb } from '../../../../lib/darktable-xmp';
 import { applyHslToRgb, applyColorGradingToRgb, isHslFlat } from '../../../../lib/hsl';
-import { applySplitToningToRgb, isSplitToningFlat, applyGrainToRgb, isGrainFlat } from '../../../../lib/effects';
+import { applySplitToningToRgb, isSplitToningFlat, applyGrainToRgb, isGrainFlat, isLensCorrectionsFlat, isCalibrationFlat } from '../../../../lib/effects';
 
 export const prerender = false;
 
