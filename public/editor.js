@@ -1645,6 +1645,7 @@
     resetKeys(["sharpen", "vignette", "dehaze", "st_balance", "grain_amount", "grain_size"]);
     resetStWheels();
     resetCgKeys();
+    draw();
   };
   var btnResetCg = document.getElementById("btn-reset-cg");
   if (btnResetCg) btnResetCg.onclick = () => resetCgKeys();
@@ -1652,9 +1653,13 @@
   if (btnResetSt) btnResetSt.onclick = () => {
     resetKeys(["st_balance"]);
     resetStWheels();
+    draw();
   };
   var btnResetHsl = document.getElementById("btn-reset-hsl");
-  if (btnResetHsl) btnResetHsl.onclick = () => resetCgKeys();
+  if (btnResetHsl) btnResetHsl.onclick = () => {
+    resetCgKeys();
+    draw();
+  };
   document.querySelectorAll(".cw").forEach((wheel) => {
     if (wheel.querySelector(".cw-reset-btn")) return;
     const btn = document.createElement("button");

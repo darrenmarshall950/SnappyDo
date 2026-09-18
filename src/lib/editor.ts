@@ -1982,15 +1982,16 @@ webglPipeline.render();
   resetKeys(['sharpen','vignette','dehaze','st_balance','grain_amount','grain_size']);
   resetStWheels();
   resetCgKeys();
+  draw();
 };
       // Wire the Color Grading section reset button (resets CG colours + HSL)
       const btnResetCg = document.getElementById('btn-reset-cg');
       if (btnResetCg) btnResetCg.onclick = () => resetCgKeys();
       // Wire any per-section reset buttons for Split Toning + HSL if present
       const btnResetSt = document.getElementById('btn-reset-st');
-      if (btnResetSt) btnResetSt.onclick = () => { resetKeys(['st_balance']); resetStWheels(); };
+      if (btnResetSt) btnResetSt.onclick = () => { resetKeys(['st_balance']); resetStWheels(); draw(); };
       const btnResetHsl = document.getElementById('btn-reset-hsl');
-      if (btnResetHsl) btnResetHsl.onclick = () => resetCgKeys(); // resets HSL too
+      if (btnResetHsl) btnResetHsl.onclick = () => { resetCgKeys(); draw(); }; // resets HSL too
 
       // Add small × reset button on every colour wheel for individual reset
       document.querySelectorAll('.cw').forEach((wheel: any) => {
