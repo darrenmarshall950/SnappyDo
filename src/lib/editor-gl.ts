@@ -664,6 +664,8 @@ export function createWebGLPipeline(): WebGLPipeline {
   // FBO + texture to hold sliders-LUT output before the curve pass.
   let curveFbo: WebGLFramebuffer | null = null;
   let curveTex: WebGLTexture | null = null;   // RGBA8, canvas size
+  let postCurveTex: WebGLTexture | null = null; // RGBA8, holds pass-2 (curve) output
+  let postCurveFbo: WebGLFramebuffer | null = null;
   // True when all channels are identity — skips the curve pass.
   let curveIsIdentity = true;
 
@@ -1199,8 +1201,27 @@ export function createWebGLPipeline(): WebGLPipeline {
       gl.uniform1f(gl.getUniformLocation(p, 'uBlacks'), lastState.blacks || 0);
     }, curveFbo, w, h);
 
-    // ── Pass 2: curve → canvas ─────────────────────────────────────────────
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // ── Pass 2: curve → postCurveFbo (NOT canvas) ───────────────────────────
+    // The post-curve output is consumed by Pass 3 (HSL/ST/grain/dehaze), so we
+    // need it as a samplable texture. Writing to canvas was the bug — pass 3
+    // couldn't read it back as a texture, so the curve got silently dropped
+    // whenever grain/dehaze/etc. were non-zero.
+    if (!postCurveFbo || !postCurveTex || postCurveTex.width !== w || postCurveTex.height !== h) {
+      if (postCurveTex) gl.deleteTexture(postCurveTex);
+      if (postCurveFbo) gl.deleteFramebuffer(postCurveFbo);
+      postCurveTex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      postCurveFbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, postCurveFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, postCurveTex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, postCurveFbo);
     gl.viewport(0, 0, w, h);
     if (curveProg && curveTexR && curveTexG && curveTexB) {
       gl.activeTexture(gl.TEXTURE0);
@@ -1218,7 +1239,7 @@ export function createWebGLPipeline(): WebGLPipeline {
         gl.uniform1i(gl.getUniformLocation(p, 'uCurveG'), 2);
         gl.uniform1i(gl.getUniformLocation(p, 'uCurveB'), 3);
         gl.uniform1i(gl.getUniformLocation(p, "uHasCurve"), curveIsIdentity ? 0 : 1);
-      }, null, w, h);
+      }, postCurveFbo, w, h);
     }
 
     // ── Pass 3: HSL Color Mixer + Color Grading → canvas ───────────────────
@@ -1240,10 +1261,11 @@ export function createWebGLPipeline(): WebGLPipeline {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       }
 
-      // Source for hsl pass: the curve pass output is already on canvas.
-      // We bind the canvas texture (via curveTex which holds the result).
+      // Source for hsl pass: read from postCurveTex which holds pass 2's
+      // curve-applied output. Previously this read from curveTex (pass 1 only),
+      // which silently dropped the tone curve whenever grain/dehaze was on.
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, curveTex || curveFbo ? curveTex : sourceTex!);
+      gl.bindTexture(gl.TEXTURE_2D, postCurveTex || curveTex);
       runPass(hslProg, () => {
         const p = hslProg!;
         gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);

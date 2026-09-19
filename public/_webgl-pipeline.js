@@ -488,6 +488,8 @@ function createWebGLPipeline() {
   let curveTexB = null;
   let curveFbo = null;
   let curveTex = null;
+  let postCurveTex = null;
+  let postCurveFbo = null;
   let curveIsIdentity = true;
   let hslProg = null;
   let hslFbo = null;
@@ -968,7 +970,22 @@ function createWebGLPipeline() {
       gl.uniform1f(gl.getUniformLocation(p, "uWhites"), lastState.whites || 0);
       gl.uniform1f(gl.getUniformLocation(p, "uBlacks"), lastState.blacks || 0);
     }, curveFbo, w, h);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!postCurveFbo || !postCurveTex || postCurveTex.width !== w || postCurveTex.height !== h) {
+      if (postCurveTex) gl.deleteTexture(postCurveTex);
+      if (postCurveFbo) gl.deleteFramebuffer(postCurveFbo);
+      postCurveTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      postCurveFbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, postCurveFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, postCurveTex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, postCurveFbo);
     gl.viewport(0, 0, w, h);
     if (curveProg && curveTexR && curveTexG && curveTexB) {
       gl.activeTexture(gl.TEXTURE0);
@@ -986,7 +1003,7 @@ function createWebGLPipeline() {
         gl.uniform1i(gl.getUniformLocation(p, "uCurveG"), 2);
         gl.uniform1i(gl.getUniformLocation(p, "uCurveB"), 3);
         gl.uniform1i(gl.getUniformLocation(p, "uHasCurve"), curveIsIdentity ? 0 : 1);
-      }, null, w, h);
+      }, postCurveFbo, w, h);
     }
     if (!isEffectsFlat() && hslProg) {
       if (!hslFbo || !hslTex || hslTex.width !== w || hslTex.height !== h) {
@@ -1005,7 +1022,7 @@ function createWebGLPipeline() {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       }
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, curveTex || curveFbo ? curveTex : sourceTex);
+      gl.bindTexture(gl.TEXTURE_2D, postCurveTex || curveTex);
       runPass(hslProg, () => {
         const p = hslProg;
         gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
