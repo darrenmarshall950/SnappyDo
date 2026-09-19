@@ -1003,8 +1003,16 @@ export function createWebGLPipeline(): WebGLPipeline {
     if (sharpenTexB) gl.deleteTexture(sharpenTexB);
     if (sharpenFboA) gl.deleteFramebuffer(sharpenFboA);
     if (sharpenFboB) gl.deleteFramebuffer(sharpenFboB);
-    sharpenTexA = createColorTex(sourceW, sourceH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
-    sharpenTexB = createColorTex(sourceW, sourceH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
+    // Sharpen textures are sized at the *canvas display size* (canvasRef.width ×
+    // canvasRef.height), not the source resolution. The sliders-LUT pass that
+    // consumes the sharpened output runs at canvas size too, so there's no
+    // resolution mismatch. Allocating at source res (e.g. 4592×3448) caused the
+    // sharpen slider to lag because three full-res GPU passes (blurH, blurV,
+    // unsharp) were running per frame on swiftshader / mobile GPUs.
+    const cw = canvasRef ? canvasRef.width : 1;
+    const ch = canvasRef ? canvasRef.height : 1;
+    sharpenTexA = createColorTex(cw, ch, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
+    sharpenTexB = createColorTex(cw, ch, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
     sharpenFboA = attachFbo(sharpenTexA);
     sharpenFboB = attachFbo(sharpenTexB);
   }
@@ -1331,7 +1339,8 @@ export function createWebGLPipeline(): WebGLPipeline {
       const shadowTint = calib.shadow_tint || 0;
       const calSat = calib.saturation || 0;
       calibIsFlat = shadowTint === 0 && calSat === 0;
-      if (!calibIsFlat && calibProg) {
+      const calibRan = !calibIsFlat && calibProg;
+      if (calibRan) {
         gl.activeTexture(gl.TEXTURE0);
         // Source: whatever is currently on canvas (from HSL pass)
         gl.bindTexture(gl.TEXTURE_2D, hslTex || curveTex || sourceTex);
@@ -1342,19 +1351,21 @@ export function createWebGLPipeline(): WebGLPipeline {
           gl.uniform1f(gl.getUniformLocation(p, 'uCalSat'), calSat);
         }, null, w, h);
       }
-    }
 
-    // ── Final blit: postCurveTex → canvas ───────────────────────────────
-    // When BOTH the HSL pass (effects flat) AND the Calibration pass (calib flat)
-    // are skipped, nothing writes the post-curve result to the canvas. We need a
-    // simple texture-to-canvas copy here so the user always sees the image.
-    if (postCurveTex) {
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
-      // Use slidersLutProg as a generic blit shader — its fragment shader samples
-      // uSource and outputs the colour directly, so it works as a straight copy.
-      // (slidersLutProg is always created in init().)
-      if (slidersLutProg) {
+      // ── Final blit: postCurveTex → canvas (only if no effect pass ran) ────
+      // The previous version ALWAYS ran this blit, which silently overwrote
+      // the HSL/ST/CG/grain/dehaze and calibration pass outputs. Dehaze (and
+      // any other pass-3-only effect) showed zero visual change because
+      // postCurveTex doesn't include those effects.
+      //
+      // Condition: only run if BOTH Pass 3 (hslProg) and the calibration pass
+      // were skipped. effectsRan covers the Pass 3 case; calibRan is computed
+      // above.
+      const effectsRan = !isEffectsFlat() && !!hslProg;
+      const needFinalBlit = !effectsRan && !calibRan;
+      if (needFinalBlit && postCurveTex && slidersLutProg) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
         runPass(slidersLutProg!, () => {
           const p = slidersLutProg!;
           gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
