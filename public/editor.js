@@ -2402,6 +2402,7 @@
     comparing = v;
     indicatorEl.classList.toggle("visible", v);
     btnCompare.classList.toggle("active", v);
+    btnCompare.setAttribute("aria-pressed", v ? "true" : "false");
     draw();
   }
   btnCompare.addEventListener("mousedown", () => setComparing(true));

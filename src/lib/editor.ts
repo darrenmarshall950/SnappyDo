@@ -2758,7 +2758,7 @@ webglPipeline.render();
         if (comparing === v) return;
         comparing = v;
         indicatorEl.classList.toggle('visible', v);
-        btnCompare.classList.toggle('active', v);
+        btnCompare.classList.toggle('active', v); btnCompare.setAttribute('aria-pressed', v ? 'true' : 'false');
         draw();
       }
       // mouse / touch — press to compare, release to return

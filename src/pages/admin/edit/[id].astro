@@ -468,11 +468,12 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
       .btn-compare-pill {
         padding: 0.5rem 1rem;
         font-weight: 600;
-        background: var(--bg);
+        background: var(--accent);
         border-color: var(--accent);
         color: var(--accent-fg);
       }
-      .btn-compare-pill.active { background: var(--accent-bg); color: white; }
+      .btn-compare-pill:hover { background: #fff; border-color: #fff; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(255,255,255,0.18); }
+      .btn-compare-pill.active { background: #0a0a0a; color: #fafafa; border-color: #fafafa; }
       .compare-icon {
         display: block;
         flex-shrink: 0;
