@@ -1344,6 +1344,45 @@ export function createWebGLPipeline(): WebGLPipeline {
       }
     }
 
+    // ── Final blit: postCurveTex → canvas ───────────────────────────────
+    // When BOTH the HSL pass (effects flat) AND the Calibration pass (calib flat)
+    // are skipped, nothing writes the post-curve result to the canvas. We need a
+    // simple texture-to-canvas copy here so the user always sees the image.
+    if (postCurveTex) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
+      // Use slidersLutProg as a generic blit shader — its fragment shader samples
+      // uSource and outputs the colour directly, so it works as a straight copy.
+      // (slidersLutProg is always created in init().)
+      if (slidersLutProg) {
+        runPass(slidersLutProg!, () => {
+          const p = slidersLutProg!;
+          gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
+          // Force sliders uniforms to neutral so the blit is a straight copy.
+          gl.uniform1f(gl.getUniformLocation(p, 'uLutIntensity'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uExposure'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uContrast'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uBrightness'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uSaturation'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uTemp'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uTint'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uVignette'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uHighlights'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uShadows'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uWhites'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uBlacks'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uStraightenAngle'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCropX'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCropY'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCropW'), 1);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCropH'), 1);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCAStrength'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCAX'), 0);
+          gl.uniform1f(gl.getUniformLocation(p, 'uCAY'), 0);
+        }, null, w, h);
+      }
+    }
+
     gl.bindVertexArray(null);
   }
 
