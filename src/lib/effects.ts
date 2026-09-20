@@ -141,7 +141,11 @@ function _hslToRgb(h: number, s: number, l: number): [number, number, number] {
   const r = norm(h + 1 / 3);
   const g = norm(h);
   const b = norm(h - 1 / 3);
-  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+  // Keep HSL helper output normalised (0..1). `applySplitToningToRgb` mixes
+  // this colour around the 0.5 neutral point before converting to 0..255.
+  // Returning byte values here made every non-zero split tone add ~255× too
+  // much and clipped the server-rendered image to white.
+  return [r, g, b];
 }
 
 // ── Lens Corrections ────────────────────────────────────────────────────────
