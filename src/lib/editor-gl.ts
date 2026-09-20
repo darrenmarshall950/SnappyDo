@@ -1102,25 +1102,29 @@ export function createWebGLPipeline(): WebGLPipeline {
     let outputTex = sourceTex;
     if (lastState.sharpen > 0 && sharpenTexA && sharpenTexB && sharpenFboA && sharpenFboB) {
       const amount = Math.max(0, Math.min(1, lastState.sharpen / 100));
+      // The ping-pong textures are display-sized. Rendering them through a
+      // source-sized viewport only populates their top-left fraction, then the
+      // later canvas-sized pass stretches that fraction into an apparent zoom.
+      const sw = canvasRef.width;
+      const sh = canvasRef.height;
       // Pass 1: horizontal blur of source → texA
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, sourceTex);
       runPass(blurHProg!, () => {
         gl.uniform1i(gl.getUniformLocation(blurHProg, 'uSource'), 0);
         gl.uniform2f(gl.getUniformLocation(blurHProg, 'uTexelSize'),
-          1 / sourceW, 1 / sourceH);
-      }, sharpenFboA, sourceW, sourceH);
+          1 / sw, 1 / sh);
+      }, sharpenFboA, sw, sh);
 
       // Pass 2: vertical blur of texA → texB
       gl.bindTexture(gl.TEXTURE_2D, sharpenTexA);
       runPass(blurVProg!, () => {
         gl.uniform1i(gl.getUniformLocation(blurVProg, 'uSource'), 0);
         gl.uniform2f(gl.getUniformLocation(blurVProg, 'uTexelSize'),
-          1 / sourceW, 1 / sourceH);
-      }, sharpenFboB, sourceW, sourceH);
+          1 / sw, 1 / sh);
+      }, sharpenFboB, sw, sh);
 
       // Pass 3: unsharp mask (source - blurredB) * amount + source → texA
-      // This writes back to texA (ping-pong: texA is the "next output" after this pass)
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, sourceTex);
       gl.activeTexture(gl.TEXTURE2);
@@ -1129,7 +1133,7 @@ export function createWebGLPipeline(): WebGLPipeline {
         gl.uniform1i(gl.getUniformLocation(unsharpProg, 'uSource'), 0);
         gl.uniform1i(gl.getUniformLocation(unsharpProg, 'uBlur'), 2);
         gl.uniform1f(gl.getUniformLocation(unsharpProg, 'uAmount'), amount);
-      }, sharpenFboA, sourceW, sourceH);
+      }, sharpenFboA, sw, sh);
 
       // texA now holds the sharpened result
       outputTex = sharpenTexA;

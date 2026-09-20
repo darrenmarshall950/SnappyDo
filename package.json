@@ -9,7 +9,7 @@
     "build": "npm run build:js && astro build",
     "preview": "astro preview",
     "start": "node ./dist/server/entry.mjs",
-    "test": "echo 'no tests yet' && exit 0",
+    "test": "node tests/sharpen-viewport.test.mjs",
     "lint": "echo 'no lint yet' && exit 0",
     "typecheck": "astro check",
     "docker:build": "docker compose build",

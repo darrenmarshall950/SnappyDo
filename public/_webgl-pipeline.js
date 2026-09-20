@@ -809,8 +809,10 @@ function createWebGLPipeline() {
     if (sharpenTexB) gl.deleteTexture(sharpenTexB);
     if (sharpenFboA) gl.deleteFramebuffer(sharpenFboA);
     if (sharpenFboB) gl.deleteFramebuffer(sharpenFboB);
-    sharpenTexA = createColorTex(sourceW, sourceH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
-    sharpenTexB = createColorTex(sourceW, sourceH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
+    const cw = canvasRef ? canvasRef.width : 1;
+    const ch = canvasRef ? canvasRef.height : 1;
+    sharpenTexA = createColorTex(cw, ch, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
+    sharpenTexB = createColorTex(cw, ch, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE);
     sharpenFboA = attachFbo(sharpenTexA);
     sharpenFboB = attachFbo(sharpenTexB);
   }
@@ -883,25 +885,27 @@ function createWebGLPipeline() {
     let outputTex = sourceTex;
     if (lastState.sharpen > 0 && sharpenTexA && sharpenTexB && sharpenFboA && sharpenFboB) {
       const amount = Math.max(0, Math.min(1, lastState.sharpen / 100));
+      const sw = canvasRef.width;
+      const sh = canvasRef.height;
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, sourceTex);
       runPass(blurHProg, () => {
         gl.uniform1i(gl.getUniformLocation(blurHProg, "uSource"), 0);
         gl.uniform2f(
           gl.getUniformLocation(blurHProg, "uTexelSize"),
-          1 / sourceW,
-          1 / sourceH
+          1 / sw,
+          1 / sh
         );
-      }, sharpenFboA, sourceW, sourceH);
+      }, sharpenFboA, sw, sh);
       gl.bindTexture(gl.TEXTURE_2D, sharpenTexA);
       runPass(blurVProg, () => {
         gl.uniform1i(gl.getUniformLocation(blurVProg, "uSource"), 0);
         gl.uniform2f(
           gl.getUniformLocation(blurVProg, "uTexelSize"),
-          1 / sourceW,
-          1 / sourceH
+          1 / sw,
+          1 / sh
         );
-      }, sharpenFboB, sourceW, sourceH);
+      }, sharpenFboB, sw, sh);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, sourceTex);
       gl.activeTexture(gl.TEXTURE2);
@@ -910,7 +914,7 @@ function createWebGLPipeline() {
         gl.uniform1i(gl.getUniformLocation(unsharpProg, "uSource"), 0);
         gl.uniform1i(gl.getUniformLocation(unsharpProg, "uBlur"), 2);
         gl.uniform1f(gl.getUniformLocation(unsharpProg, "uAmount"), amount);
-      }, sharpenFboA, sourceW, sourceH);
+      }, sharpenFboA, sw, sh);
       outputTex = sharpenTexA;
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, outputTex);
@@ -1076,7 +1080,8 @@ function createWebGLPipeline() {
       const shadowTint = calib.shadow_tint || 0;
       const calSat = calib.saturation || 0;
       calibIsFlat = shadowTint === 0 && calSat === 0;
-      if (!calibIsFlat && calibProg) {
+      const calibRan = !calibIsFlat && calibProg;
+      if (calibRan) {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, hslTex || curveTex || sourceTex);
         runPass(calibProg, () => {
@@ -1084,6 +1089,36 @@ function createWebGLPipeline() {
           gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
           gl.uniform1f(gl.getUniformLocation(p, "uShadowTint"), shadowTint);
           gl.uniform1f(gl.getUniformLocation(p, "uCalSat"), calSat);
+        }, null, w, h);
+      }
+      const effectsRan = !isEffectsFlat() && !!hslProg;
+      const needFinalBlit = !effectsRan && !calibRan;
+      if (needFinalBlit && postCurveTex && slidersLutProg) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
+        runPass(slidersLutProg, () => {
+          const p = slidersLutProg;
+          gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uLutIntensity"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uExposure"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uContrast"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uBrightness"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uSaturation"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uTemp"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uTint"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uVignette"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uHighlights"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uShadows"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uWhites"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uBlacks"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uStraightenAngle"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCropX"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCropY"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCropW"), 1);
+          gl.uniform1f(gl.getUniformLocation(p, "uCropH"), 1);
+          gl.uniform1f(gl.getUniformLocation(p, "uCAStrength"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCAX"), 0);
+          gl.uniform1f(gl.getUniformLocation(p, "uCAY"), 0);
         }, null, w, h);
       }
     }
