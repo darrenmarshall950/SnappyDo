@@ -82,8 +82,9 @@ export function applyHslToRgb(
   hslData: HslData,
 ): [number, number, number] {
   if (isHslFlat(hslData)) return [r, g, b];
-  const rn = r / 255, gn = g / 255, bn = b / 255;
-  let [h, s, l] = rgb2hsl(rn, gn, bn);
+  // rgb2hsl normalizes inputs internally — do not pre-normalize here
+  // (pre-normalizing was a double-divide bug that turned every pixel black).
+  let [h, s, l] = rgb2hsl(r, g, b);
   const RANGE = 0.125;
   for (const [name, centerH] of RANGE_CENTERS) {
     const key = 'hsl_' + name;
