@@ -1551,6 +1551,16 @@ webglPipeline.render();
           // Refresh Delete button visibility in case a new user preset was just saved
           if (typeof updateDeletePresetButton === 'function') updateDeletePresetButton();
         } catch (e) { console.warn('loadPresets failed', e); }
+        // R48 — On reopen: sync the preset dropdown to whatever was saved (state.preset_id).
+        // loadPresets() populates options asynchronously; we need to set the value AFTER
+        // the options are in the DOM or the dropdown silently shows "Choose preset…".
+        try {
+          const sel2 = document.getElementById('preset-select');
+          if (sel2 && state && state.preset_id) {
+            sel2.value = String(state.preset_id);
+            if (typeof updateDeletePresetButton === 'function') updateDeletePresetButton();
+          }
+        } catch {}
       }
 
       // Sort LUTs so the 5 built-ins sit at the top of the dropdown,
@@ -1736,7 +1746,7 @@ webglPipeline.render();
         });
       }
 
-      // Hydrate LUTs + Presets on load
+      // Hydrate LUTs + Presets + Tone Curve on load
       loadPresets();
       loadLuts().then(() => {
         // If state already has a lut_id from initialParams (saved edit),
@@ -3268,5 +3278,37 @@ webglPipeline.render();
 
   // ── Boot ───────────────────────────────────────────────────────────────────
   _cvInit();
+
+  // R48 — On reopen: load the saved tone curve into _cvData so the curve UI
+  // and canvas both reflect what was saved. state.curve is {rgb,r,g,b} arrays
+  // of [x,y] points where x/y are 0..255. _cvData expects the same shape.
+  // Must run AFTER _cvData is initialised (line 2916) and _cvInit() (above)
+  // has set up the SVG / channel tabs / handlers.
+  try {
+    const savedCurve = (window.__EDITOR_DATA__?.initialParams?.curve) || state?.curve;
+    if (savedCurve && typeof savedCurve === 'object' && window._cvData) {
+      const cv = window._cvData;
+      ['rgb', 'r', 'g', 'b'].forEach((ch) => {
+        if (Array.isArray(savedCurve[ch])) {
+          cv[ch] = savedCurve[ch]
+            .filter((p) => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+            .map((p) => [Number(p[0]), Number(p[1])]);
+          if (cv[ch].length === 0 || cv[ch][0][0] !== 0) cv[ch].unshift([0, 0]);
+          if (cv[ch][cv[ch].length - 1][0] !== 255) cv[ch].push([255, 255]);
+          cv[ch].sort((a, b) => a[0] - b[0]);
+        }
+      });
+      // Restore the active channel so the curve tab indicator + display match saved state
+      const savedCh = (window.__EDITOR_DATA__?.initialParams?.curveCh) || state?.curveCh;
+      if (savedCh && typeof window.setCvCh === 'function') {
+        window.setCvCh(savedCh);
+      }
+      // Push the saved curves into the GPU pipeline and redraw + redraw the SVG
+      if (typeof window._cvSync === 'function') window._cvSync();
+      if (typeof window._cvRefresh === 'function') window._cvRefresh();
+      // Trigger one render so the canvas shows the saved curve straight away
+      if (typeof draw === 'function') draw();
+    }
+  } catch (e) { console.warn('curve hydrate failed', e); }
   _histStart();
       setStatus('Editor ready.');
