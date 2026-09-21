@@ -1,14 +1,13 @@
 /**
  * GET /api/images/:id/source
  *
- * Streams the original (or latest edit) image bytes with permissive CORS so
+ * Streams the original image bytes with permissive CORS so
  * the admin editor's <canvas> stays un-tainted and `canvas.toBlob()` works
  * on Save. Imgproxy doesn't ship CORS headers, so we serve from SnappyDo
  * directly when the editor needs an un-tainted source.
  */
 import type { APIRoute } from 'astro';
 import { getImage } from '../../../../lib/db';
-import { latestEditFor } from '../../../../lib/db-image-edits';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -37,8 +36,8 @@ export const GET: APIRoute = async ({ params, request }) => {
       status: 404, headers: { 'Content-Type': 'application/json' },
     });
   }
-  const edit = latestEditFor(id);
-  const servePath = edit?.rendered_path ?? row.path;
+  // CRITICAL: always serve original. See comment below.
+  const servePath = row.path; /* latest edit would re-apply edits on reload = double-bake */
   const absPath = join(UPLOAD_DIR, servePath);
 
   let total: number;

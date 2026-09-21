@@ -39,7 +39,13 @@ import { readAdminSession } from '../../../../lib/auth';
 import { imgproxyUrl } from '../../../../lib/imgproxy';
 import { buildDarktableXmp, readCameraWb } from '../../../../lib/darktable-xmp';
 import { applyHslToRgb, applyColorGradingToRgb, isHslFlat } from '../../../../lib/hsl';
-import { applySplitToningToRgb, isSplitToningFlat, applyGrainToRgb, isGrainFlat, isLensCorrectionsFlat, isCalibrationFlat } from '../../../../lib/effects';
+import {
+  applySplitToningToRgb, isSplitToningFlat,
+  applyGrainToRgb, isGrainFlat,
+  isLensCorrectionsFlat, isCalibrationFlat,
+  applyHighlightsShadowsWhitesBlacksToRgb, isHighlightsShadowsWhitesBlacksFlat,
+  applyToneCurveToRgb, isToneCurveFlat, buildCurveLut,
+} from "../../../../lib/effects";
 
 export const prerender = false;
 
@@ -69,7 +75,22 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
 
   let pipeline = img;
 
-  // ---- Crop first (UV space 0..1) ----
+  // ---- Straighten (rotation) BEFORE crop, so crop UVs are in the
+  // rotated frame. The WebGL preview applies rotateUv() first, then the
+  // crop window. Matching that order on the server keeps the saved image
+  // in the same orientation as the preview.
+  const straightenAngle = Number(params.straighten) || 0;
+  if (Math.abs(straightenAngle) > 0.01) {
+    // Sharp's .rotate() takes degrees, positive = clockwise (CCW in image
+    // space because Y is flipped). The WebGL rotateUv() rotates UV around
+    // (0.5, 0.5) by the angle (CCW for positive angle in screen space).
+    // Sharp's rotate() convention: degrees clockwise from the original.
+    // Both produce the same image rotation when angle is treated as
+    // degrees-of-rotation in the same direction the user sees.
+    pipeline = pipeline.rotate(straightenAngle, { background: { r: 0, g: 0, b: 0, alpha: 1 } });
+  }
+
+  // ---- Crop first (UV space 0..1, in the straightened frame) ----
   let appliedCrop: any | null = null;
   if (params.crop && W && H) {
     const left = Math.max(0, Math.round(params.crop.x * W));
@@ -81,7 +102,14 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
   }
 
   // ---- Adjustments ----
-  // Exposure (-200..200 stops): factor = 2^(exposure/100)
+  // Sliders (exposure, brightness, contrast, saturation, temp, tint) are
+  // applied in the per-pixel loop below using the SAME RGB-space math as
+  // the WebGL shader in editor-gl.ts. Sharp's .modulate()/.linear()/.tint()
+  // operate in HSL-space and produce visibly different output, so we
+  // cannot use them — they made the saved image ~40 RGB units darker than
+  // the canvas preview on warm/muted brick pixels, which Daz perceived as
+  // "saved image turned B&W". The pixel-level RGB math matches the canvas
+  // exactly.
   const exposure = Number(params.exposure) || 0;
   const brightness = Number(params.brightness) || 0;
   const saturation = Number(params.saturation) || 0;
@@ -89,45 +117,10 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
   const temp = Number(params.temp) || 0;
   const tint = Number(params.tint) || 0;
 
-  const expFactor = Math.pow(2, exposure / 100);            // 0.25..4
-  const brightFactor = 1 + brightness / 100;                 // 0..2 (additive)
-  const brightnessFactor = expFactor * brightFactor;         // combined
-  const saturationFactor = Math.max(0, 1 + saturation / 100); // 0..2
-
-  if (brightnessFactor !== 1 || saturationFactor !== 1) {
-    pipeline = pipeline.modulate({
-      brightness: brightnessFactor,
-      saturation: saturationFactor,
-    });
-  }
-
-  // Contrast: a * in + b; for contrast +/-100 -> a=2 (or 0); b=(1-a)/2
-  if (contrast !== 0) {
-    const a = 1 + contrast / 100;
-    const b = (1 - a) / 2;
-    pipeline = pipeline.linear(a, b);
-  }
-
-  // WB temp/tint via .tint(). Sharp expects {r,g,b} in 0..255.
-  // temp > 0 = warmer (push red, pull blue). temp < 0 = cooler.
-  // tint > 0 = push green, tint < 0 = push magenta.
-  if (temp !== 0 || tint !== 0) {
-    const t = Math.max(-200, Math.min(200, temp));
-    const u = Math.max(-200, Math.min(200, tint));
-    // ±200 = 2× prior max effect; rDelta scales to ±120 (was ±60).
-    const rDelta = t * 0.6;        // +/-120 per max temp
-    const bDelta = -t * 0.6;
-    const gDelta = u * 0.5;
-    const base = 240;              // near-white tint base
-    const tintR = Math.max(180, Math.min(255, base + rDelta));
-    const tintG = Math.max(180, Math.min(255, base + gDelta));
-    const tintB = Math.max(180, Math.min(255, base + bDelta));
-    // Mix amount — how strongly to apply the tint (rough approximation)
-    const tintMix = (Math.abs(t) + Math.abs(u)) / 200 * 0.25;  // 0..0.5 (max at ±200)
-    if (tintMix > 0) {
-      pipeline = pipeline.tint({ r: tintR, g: tintG, b: tintB }).linear(1, 0);
-    }
-  }
+  // slidersNeedProcessing: true if any slider is non-zero (forces pixel loop)
+  const slidersNeedProcessing =
+    exposure !== 0 || brightness !== 0 || contrast !== 0 ||
+    saturation !== 0 || temp !== 0 || tint !== 0;
 
   const sharpen = Number(params.sharpen) || 0;       // 0..100
   if (sharpen > 0) {
@@ -136,58 +129,10 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
     pipeline = pipeline.sharpen({ sigma, m1: 1, m2: 1 });
   }
 
-  const vignette = Number(params.vignette) || 0;     // 0..100
-  if (vignette > 0) {
-    // Build a radial grayscale mask and composite via `multiply`.
-    //
-    // Why raw RGB and not SVG: the previous SVG-radialGradient approach went
-    // through librsvg and was rendering INVERTED — centre came out solid
-    // black and corners barely tinted. Multiplied, that turned the centre of
-    // the saved image into a black rectangle ("vignetted box at centre")
-    // while leaving the corners alone. Raw RGB pixels are unambiguous.
-    //
-    // Mask convention: 255 (white) = no darkening at multiply blend;
-    // 0 (black) = full darkening. So we draw white at the centre and drop
-    // smoothly to dark at the corners.
-    const amount = Math.max(0.05, Math.min(0.95, vignette / 100));
-    const cropMeta = await pipeline.metadata();
-    const W = cropMeta.width || 1;
-    const H = cropMeta.height || 1;
-    const cx = W / 2;
-    const cy = H / 2;
-    // Normalised radius in elliptical space — corners land at ~1.0.
-    const normX = W / 2;
-    const normY = H / 2;
-    const innerStop = 0.30 - amount * 0.15;   // 0.15..0.30 of the ellipse
-    const cornerDarken = 0.25 + amount * 0.55; // 0.275..0.80 darken at corners
-    const mask = Buffer.alloc(W * H * 3);
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const dx = (x - cx) / normX;
-        const dy = (y - cy) / normY;
-        const d = Math.sqrt(dx * dx + dy * dy);   // 0 at centre, ~1 at corners
-        let v: number;                              // 255 = white (no effect)
-        if (d <= innerStop) {
-          v = 255;
-        } else if (d >= 1.0) {
-          v = Math.round(255 * (1 - cornerDarken));
-        } else {
-          // Smooth ease from innerStop..1.0 — darken ramps from 0 to cornerDarken.
-          const t = (d - innerStop) / (1.0 - innerStop);
-          // easeInOut for nicer falloff
-          const eased = t * t * (3 - 2 * t);
-          v = Math.round(255 * (1 - eased * cornerDarken));
-        }
-        const idx = (y * W + x) * 3;
-        mask[idx] = v; mask[idx + 1] = v; mask[idx + 2] = v;
-      }
-    }
-    pipeline = pipeline.composite([{
-      input: mask,
-      raw: { width: W, height: H, channels: 3 },
-      blend: 'multiply',
-    }]);
-  }
+  // ---- Vignette applied AFTER LUT pass (matches WebGL preview order:
+  // sliders → LUT → vignette). Old position darkened the LUT result by
+  // multiplying with the mask, which made the saved image noticeably dimmer
+  // than the preview when both LUT and heavy vignette were active.
 
   // ---- HSL Color Mixer + Color Grading (pixel-level) ----
   // Build HSL data from params
@@ -232,6 +177,29 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
   const stNeedsProcessing = !isSplitToningFlat(splitToningParams);
   const grainNeedsProcessing = !isGrainFlat(grainParams);
 
+  // Highlights / Shadows / Whites / Blacks (basic panel sliders)
+  const hswbParams = {
+    highlights: Number(params.highlights) || 0,
+    shadows: Number(params.shadows) || 0,
+    whites: Number(params.whites) || 0,
+    blacks: Number(params.blacks) || 0,
+  };
+  const hswbNeedsProcessing = !isHighlightsShadowsWhitesBlacksFlat(hswbParams);
+
+  // Tone Curve (params.curve = { rgb: [[x,y]...], r: [...], g: [...], b: [...] })
+  const curveParams = params.curve || null;
+  const curveNeedsProcessing = !isToneCurveFlat(curveParams);
+  let lutRgb: Float32Array | null = null;
+  let lutR: Float32Array | null = null;
+  let lutG: Float32Array | null = null;
+  let lutB: Float32Array | null = null;
+  if (curveNeedsProcessing) {
+    lutRgb = buildCurveLut(curveParams!.rgb);
+    lutR   = buildCurveLut(curveParams!.r);
+    lutG   = buildCurveLut(curveParams!.g);
+    lutB   = buildCurveLut(curveParams!.b);
+  }
+
   // Lens corrections (baseline exposure + CA)
   const lensCorrectionsParams: LensCorrectionsData = params.lens_corrections || {};
   const needsLensCorrectionsPipeline = !isLensCorrectionsFlat(lensCorrectionsParams);
@@ -243,7 +211,10 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
   // Spot removals (applied after everything)
   const spotRemovals: SpotRemoval[] = params.spot_removals || [];
 
-  const needsPixelLoop = hslNeedsProcessing || cgNeedsProcessing || stNeedsProcessing || grainNeedsProcessing || dehazeVal !== 0 || calNeedsProcessing;
+  // Sliders MUST go through the per-pixel loop too (RGB-space math,
+  // not Sharp's HSL-space modulate). Otherwise the slider values are
+  // silently skipped for presets that only adjust sliders + LUT.
+  const needsPixelLoop = hslNeedsProcessing || cgNeedsProcessing || stNeedsProcessing || grainNeedsProcessing || dehazeVal !== 0 || calNeedsProcessing || hswbNeedsProcessing || curveNeedsProcessing || slidersNeedProcessing;
 
   // Apply lens corrections (baseline exposure + CA) before pixel loop
   if (needsLensCorrectionsPipeline) {
@@ -263,6 +234,58 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
       const x = i % info.width;
       const y = Math.floor(i / info.width);
       let r = data[base], g = data[base + 1], b = data[base + 2];
+
+      // ---- Sliders (RGB-space math, matches editor-gl.ts shader exactly) ----
+      // Order: exposure → brightness → contrast → saturation → temp → tint.
+      // Must come BEFORE HSWB / HSL / CG / dehaze / ST / curve so the
+      // downstream passes see the slider-adjusted pixel.
+      if (slidersNeedProcessing) {
+        // Convert to 0..1
+        let cr = r / 255, cg = g / 255, cb = b / 255;
+        // Exposure (multiplicative)
+        const expF = Math.pow(2, exposure / 100);
+        cr *= expF; cg *= expF; cb *= expF;
+        // Brightness (multiplicative scale around 1.0)
+        const bMul = 1 + brightness / 100;
+        cr *= bMul; cg *= bMul; cb *= bMul;
+        // Contrast (linear stretch around 0.5)
+        const cF = (100 + contrast) / 100;
+        cr = (cr - 0.5) * cF + 0.5;
+        cg = (cg - 0.5) * cF + 0.5;
+        cb = (cb - 0.5) * cF + 0.5;
+        cr = Math.max(0, Math.min(1, cr));
+        cg = Math.max(0, Math.min(1, cg));
+        cb = Math.max(0, Math.min(1, cb));
+        // Saturation (mix with luminance grey at satFactor=0)
+        const luma = 0.299 * cr + 0.587 * cg + 0.114 * cb;
+        const sF = Math.max(0, 1 + saturation / 100);
+        cr = luma + (cr - luma) * sF;
+        cg = luma + (cg - luma) * sF;
+        cb = luma + (cb - luma) * sF;
+        // Temp (warm/cool): R opposite B
+        const tempShift = temp / 100 * 0.15;
+        cr += tempShift;
+        cb -= tempShift;
+        // Tint (magenta/green): R+G opposite B
+        const tintShift = tint / 100 * 0.1;
+        cr += tintShift * 0.5;
+        cg += tintShift * 0.5;
+        cb -= tintShift;
+        // Clamp + back to 0..255
+        cr = Math.max(0, Math.min(1, cr));
+        cg = Math.max(0, Math.min(1, cg));
+        cb = Math.max(0, Math.min(1, cb));
+        r = Math.round(cr * 255);
+        g = Math.round(cg * 255);
+        b = Math.round(cb * 255);
+      }
+
+      // Highlights / Shadows / Whites / Blacks first — operates on raw
+      // luminance from the slider pass. Must come before tone curve so
+      // the curve sees the tone-region-adjusted pixel.
+      if (hswbNeedsProcessing) {
+        [r, g, b] = applyHighlightsShadowsWhitesBlacksToRgb(r, g, b, hswbParams);
+      }
       if (hslNeedsProcessing) {
         [r, g, b] = applyHslToRgb(r, g, b, hslData);
       }
@@ -279,6 +302,12 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
       if (stNeedsProcessing) {
         [r, g, b] = applySplitToningToRgb(r, g, b, splitToningParams);
       }
+      // Tone curve — applied after H/S/W/B + colour ops so the curve
+      // sees the post-region-adjusted pixel. Matches the WebGL pipeline
+      // order (Pass 2 = curve, after Pass 1 sliders).
+      if (curveNeedsProcessing) {
+        [r, g, b] = applyToneCurveToRgb(r, g, b, curveParams!, lutRgb!, lutR!, lutG!, lutB!);
+      }
       if (grainNeedsProcessing) {
         [r, g, b] = applyGrainToRgb(r, g, b, grainParams, x, y, timeMs);
       }
@@ -287,7 +316,7 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
       }
       data[base] = r; data[base + 1] = g; data[base + 2] = b;
     }
-
+    // Sample data AFTER modification - distributed across image
     // Apply spot removals after all other pixel processing
     if (spotRemovals.length > 0) {
       applySpotRemovalsToBuffer(data, info.width, info.height, spotRemovals);
@@ -316,10 +345,71 @@ async function renderWithSharp(originalPath: string, params: any): Promise<{ buf
         raw: { width: rgba.info.width, height: rgba.info.height, channels: 4 },
       });
       appliedLut = { id: lutRow.id, name: lutRow.name, intensity: lutIntensity };
+      const afterLutMeta = await pipeline.metadata();
     }
+
+  // ---- Vignette (applied AFTER LUT, matching WebGL preview order) ----
+
+  const vignette = Number(params.vignette) || 0;     // 0..100
+  if (vignette > 0) {
+    // Build a radial grayscale mask and composite via `multiply`.
+    //
+    // Why raw RGB and not SVG: the previous SVG-radialGradient approach went
+    // through librsvg and was rendering INVERTED — centre came out solid
+    // black and corners barely tinted. Multiplied, that turned the centre of
+    // the saved image into a black rectangle ("vignetted box at centre")
+    // while leaving the corners alone. Raw RGB pixels are unambiguous.
+    //
+    // Mask convention: 255 (white) = no darkening at multiply blend;
+    // 0 (black) = full darkening. So we draw white at the centre and drop
+    // smoothly to dark at the corners.
+    const amount = Math.max(0.05, Math.min(0.95, vignette / 100));
+    const cropMeta = await pipeline.metadata();
+    const W = cropMeta.width || 1;
+    const H = cropMeta.height || 1;  // same as after LUT (no resize ops)
+    const cx = W / 2;
+    const cy = H / 2;
+    // Normalised radius in elliptical space — corners land at ~1.0.
+    const normX = W / 2;
+    const normY = H / 2;
+    const innerStop = 0.30 - amount * 0.15;   // 0.15..0.30 of the ellipse
+    const cornerDarken = 0.25 + amount * 0.55; // 0.275..0.80 darken at corners
+    const mask = Buffer.alloc(W * H * 3);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const dx = (x - cx) / normX;
+        const dy = (y - cy) / normY;
+        const d = Math.sqrt(dx * dx + dy * dy);   // 0 at centre, ~1 at corners
+        let v: number;                              // 255 = white (no effect)
+        if (d <= innerStop) {
+          v = 255;
+        } else if (d >= 1.0) {
+          v = Math.round(255 * (1 - cornerDarken));
+        } else {
+          // Smooth ease from innerStop..1.0 — darken ramps from 0 to cornerDarken.
+          const t = (d - innerStop) / (1.0 - innerStop);
+          // easeInOut for nicer falloff
+          const eased = t * t * (3 - 2 * t);
+          v = Math.round(255 * (1 - eased * cornerDarken));
+        }
+        const idx = (y * W + x) * 3;
+        mask[idx] = v; mask[idx + 1] = v; mask[idx + 2] = v;
+      }
+    }
+    pipeline = pipeline.composite([{
+      input: mask,
+      raw: { width: W, height: H, channels: 3 },
+      blend: 'multiply',
+    }]);
+    const afterVigMeta = await pipeline.metadata();
+  }
+
+
   }
 
   const buf = await pipeline.jpeg({ quality: 95, mozjpeg: true }).toBuffer();
+  // Sample buf
+  const meta2 = await sharp(buf).metadata();
   return { buf, appliedCrop, appliedLut };
 }
 /**

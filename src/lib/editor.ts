@@ -2789,18 +2789,20 @@ webglPipeline.render();
           const res = await fetch('/api/images/' + imageId + '/edit', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ params: { ...state, history: _history }, sourceUrl }),
+            body: JSON.stringify({ params: { ...state, history: _history, curve: _cvData }, sourceUrl }),
           });
           if (!res.ok) throw new Error(await res.text());
           const data = await res.json();
-          setStatus('Saved #' + data.edit.id + ' at ' + new Date(data.edit.created_at + 'Z').toLocaleTimeString() + '. Reloading preview from saved result…');
+          setStatus('Saved #' + data.edit.id + ' at ' + new Date(data.edit.created_at + 'Z').toLocaleTimeString() + '. Reloading source…');
           btnRevert.disabled = false;
           toast('Edit saved.');
-          // Reload the source from the CORS endpoint so the canvas preview
-          // reflects the SAVED file (imgproxy URL would CORS-taint the canvas
-          // and break further saves). Cache-buster avoids the 5-min browser
-          // cache on /source serving the previous render.
-          _resetOnLoad = true;
+          // Reload the source from the CORS endpoint so subsequent edits
+          // re-fetch from disk. Cache-buster avoids the 5-min browser cache
+          // on /source. DO NOT set _resetOnLoad here — that triggers
+          // resetAllStateAndUi() on sourceImage.onload, which wipes every
+          // slider to zero and visibly shifts the preview after every Save.
+          // /source now always serves the original file, so state must be
+          // preserved across the reload.
           sourceImage.src = '/api/images/' + imageId + '/source?ts=' + Date.now();
           // Reapply CSS preview approximation after reload (saved state may differ)
           if (typeof applyRawPreviewFx === 'function') applyRawPreviewFx();

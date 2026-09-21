@@ -2440,14 +2440,13 @@
       const res = await fetch("/api/images/" + imageId + "/edit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ params: { ...state, history: _history }, sourceUrl })
+        body: JSON.stringify({ params: { ...state, history: _history, curve: _cvData }, sourceUrl })
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      setStatus("Saved #" + data.edit.id + " at " + (/* @__PURE__ */ new Date(data.edit.created_at + "Z")).toLocaleTimeString() + ". Reloading preview from saved result\u2026");
+      setStatus("Saved #" + data.edit.id + " at " + (/* @__PURE__ */ new Date(data.edit.created_at + "Z")).toLocaleTimeString() + ". Reloading source\u2026");
       btnRevert.disabled = false;
       toast("Edit saved.");
-      _resetOnLoad = true;
       sourceImage.src = "/api/images/" + imageId + "/source?ts=" + Date.now();
       if (typeof applyRawPreviewFx === "function") applyRawPreviewFx();
     } catch (e) {

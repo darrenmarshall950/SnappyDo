@@ -353,3 +353,200 @@ export function applySpotRemovalsToBuffer(
     }
   }
 }
+
+
+// ── Highlights / Shadows / Whites / Blacks ───────────────────────────────────
+
+export interface HSWBState {
+  highlights: number;  // -100..+100
+  shadows: number;     // -100..+100
+  whites: number;      // -100..+100
+  blacks: number;      // -100..+100
+}
+
+/**
+ * Returns true if the Highlights / Shadows / Whites / Blacks block is flat
+ * (all four sliders at exactly zero). Lets the server skip the per-pixel
+ * work for the common no-tweaks case.
+ */
+export function isHighlightsShadowsWhitesBlacksFlat(s: HSWBState | undefined | null): boolean {
+  if (!s) return true;
+  return (
+    Math.abs(s.highlights) < 1e-4 &&
+    Math.abs(s.shadows) < 1e-4 &&
+    Math.abs(s.whites) < 1e-4 &&
+    Math.abs(s.blacks) < 1e-4
+  );
+}
+
+/**
+ * Apply Lightroom-style H/S/W/B tone-region adjustments to an RGB pixel.
+ *
+ * Port of the WebGL applySliders() shader (editor-gl.ts around line 145).
+ * Mirrors the smoothstep masks used in the preview so the saved image
+ * matches what the user sees.
+ *
+ *   shadowsMask    = 1.0 - smoothstep(0.0, 0.35, lum)
+ *   highlightsMask = smoothstep(0.65, 1.0, lum)
+ *   whitesMask     = smoothstep(0.4, 1.0, lum)
+ *   blacksMask     = 1.0 - smoothstep(0.0, 0.6, lum)
+ *
+ * Adjustments are in 0..1 space and add to the pixel — same as the GLSL.
+ */
+export function applyHighlightsShadowsWhitesBlacksToRgb(
+  r: number, g: number, b: number,
+  s: HSWBState,
+): [number, number, number] {
+  if (isHighlightsShadowsWhitesBlacksFlat(s)) return [r, g, b];
+
+  const lum = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+
+  const shadowsMask    = 1.0 - smoothstep(0.0, 0.35, lum);
+  const highlightsMask = smoothstep(0.65, 1.0, lum);
+  const whitesMask     = smoothstep(0.4, 1.0, lum);
+  const blacksMask     = 1.0 - smoothstep(0.0, 0.6, lum);
+
+  let dr = 0, dg = 0, db = 0;
+
+  if (s.shadows !== 0) {
+    const sh = (s.shadows / 100) * 0.5;
+    const a = sh * shadowsMask * 255;
+    dr += a; dg += a; db += a;
+  }
+  if (s.highlights !== 0) {
+    const hi = (s.highlights / 100) * 0.5;
+    const a = hi * highlightsMask * 255;
+    dr += a; dg += a; db += a;
+  }
+  if (s.whites !== 0) {
+    const w = (s.whites / 100) * 0.3;
+    const a = w * whitesMask * 255;
+    dr += a; dg += a; db += a;
+  }
+  if (s.blacks !== 0) {
+    const bk = (s.blacks / 100) * 0.3;
+    const a = bk * blacksMask * 255;
+    dr += a; dg += a; db += a;
+  }
+
+  return [
+    Math.max(0, Math.min(255, r + dr)),
+    Math.max(0, Math.min(255, g + dg)),
+    Math.max(0, Math.min(255, b + db)),
+  ];
+}
+
+// Standard GLSL `smoothstep(edge0, edge1, x)` formula. Returns 0..1.
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  if (edge1 <= edge0) return x < edge0 ? 0 : 1;
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+// ── Tone Curve ──────────────────────────────────────────────────────────────
+
+export type CurveChannel = Array<[number, number]>;  // [[x, y], ...] with x,y in 0..255
+export interface CurveState {
+  rgb: CurveChannel;
+  r: CurveChannel;
+  g: CurveChannel;
+  b: CurveChannel;
+}
+
+/**
+ * True if all four channels are either empty or the standard identity curve
+ * (single [[0,0],[255,255]] pair). Lets the server skip the curve pass when
+ * the user hasn't tweaked the curve.
+ */
+export function isToneCurveFlat(curve: CurveState | undefined | null): boolean {
+  if (!curve) return true;
+  return (
+    _isIdentityChannel(curve.rgb) &&
+    _isIdentityChannel(curve.r) &&
+    _isIdentityChannel(curve.g) &&
+    _isIdentityChannel(curve.b)
+  );
+}
+
+function _isIdentityChannel(ch: CurveChannel | undefined | null): boolean {
+  if (!ch || ch.length === 0) return true;
+  if (
+    ch.length === 2 &&
+    ch[0][0] === 0 && ch[0][1] === 0 &&
+    ch[1][0] === 255 && ch[1][1] === 255
+  ) return true;
+  return false;
+}
+
+/**
+ * Build a 256-entry Float32 LUT from a curve channel by linear interpolation
+ * between control points. Direct port of _buildLut() in editor-gl.ts.
+ *
+ * Returns a 256-entry array in 0..1 space (matches the client shader).
+ */
+export function buildCurveLut(ch: CurveChannel | undefined): Float32Array {
+  const lut = new Float32Array(256);
+  if (!ch || ch.length === 0) {
+    for (let i = 0; i < 256; i++) lut[i] = i / 255;
+    return lut;
+  }
+  const pts = [...ch].sort((a, b) => a[0] - b[0]);
+  const x0 = pts[0][0], x1 = pts[pts.length - 1][0];
+  for (let x = 0; x < 256; x++) {
+    if (x <= x0) { lut[x] = pts[0][1] / 255; continue; }
+    if (x >= x1) { lut[x] = pts[pts.length - 1][1] / 255; continue; }
+    let lo = 0, hi = pts.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (pts[mid][0] <= x) lo = mid;
+      else hi = mid;
+    }
+    const xLo = pts[lo][0], yLo = pts[lo][1];
+    const xHi = pts[hi][0], yHi = pts[hi][1];
+    const t = (xHi === xLo) ? 0 : (x - xLo) / (xHi - xLo);
+    lut[x] = (yLo + t * (yHi - yLo)) / 255;
+  }
+  return lut;
+}
+
+/**
+ * Apply a tone-curve LUT set (rgb + per-channel) to an RGB pixel.
+ *
+ * When the curve is in "rgb" mode the client mirrors rgb → r,g,b (see
+ * _cvSync() in editor.ts). To match preview, if the rgb channel is
+ * non-identity we use it for ALL three channels regardless of what the
+ * per-channel r/g/b LUTs contain. If the user later edits r/g/b
+ * independently, the rgb channel may be stale but the per-channel LUTs
+ * are the source of truth — we use those instead.
+ *
+ * Heuristic (matches what the GPU shader actually does):
+ *   if rgb channel is non-identity → use rgb LUT for all three channels
+ *   else                           → use per-channel LUTs independently
+ */
+export function applyToneCurveToRgb(
+  r: number, g: number, b: number,
+  curve: CurveState,
+  lutRgb: Float32Array,
+  lutR: Float32Array,
+  lutG: Float32Array,
+  lutB: Float32Array,
+): [number, number, number] {
+  if (isToneCurveFlat(curve)) return [r, g, b];
+
+  let ro: number, go: number, bo: number;
+  if (!_isIdentityChannel(curve.rgb)) {
+    // Master "RGB" curve applies to all channels uniformly
+    ro = lutRgb[r];
+    go = lutRgb[g];
+    bo = lutRgb[b];
+  } else {
+    ro = lutR[r];
+    go = lutG[g];
+    bo = lutB[b];
+  }
+  return [
+    Math.max(0, Math.min(255, Math.round(ro * 255))),
+    Math.max(0, Math.min(255, Math.round(go * 255))),
+    Math.max(0, Math.min(255, Math.round(bo * 255))),
+  ];
+}
