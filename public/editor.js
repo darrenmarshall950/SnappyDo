@@ -1381,7 +1381,7 @@
       const prevLutId = state.lut_id || 0;
       const willReplaceLut = newLutId > 0 && newLutId !== prevLutId;
       const presetHasLut = newLutId > 0;
-      applyPresetToState(id, p);
+      applyPresetToState(id, p.params);
       if (willReplaceLut && prevLutId > 0) {
         const newLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === newLutId);
         const prevLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === prevLutId);

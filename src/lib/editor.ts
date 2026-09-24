@@ -1713,7 +1713,7 @@ webglPipeline.render();
           const willReplaceLut = newLutId > 0 && newLutId !== prevLutId;
           const presetHasLut = newLutId > 0;
 
-          applyPresetToState(id, p);
+          applyPresetToState(id, p.params);
 
           // Notify user about LUT interactions
           if (willReplaceLut && prevLutId > 0) {
