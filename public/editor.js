@@ -1539,6 +1539,8 @@
   function applyPresetToState(presetId, params) {
     if (!params) return;
     if (presetId != null) state.preset_id = Number(presetId);
+    const _prevLutId = state.lut_id || 0;
+    const _presetHasLut = !!(params.lut_id && Number(params.lut_id));
     for (const k of PRESET_SLIDER_KEYS) {
       if (k in params) setSliderValue(k, Number(params[k]) || 0);
     }
@@ -1646,11 +1648,12 @@
         if (typeof window._cvRefresh === "function") window._cvRefresh();
       }
     }
-    const newLutId = params.lut_id ? Number(params.lut_id) : 0;
-    state.lut_id = newLutId;
-    const lutSelEl = document.getElementById("lut-select");
-    if (lutSelEl) lutSelEl.value = newLutId ? String(newLutId) : "";
-    if (newLutId) {
+    let newLutId = 0;
+    if (_presetHasLut) {
+      newLutId = Number(params.lut_id);
+      state.lut_id = newLutId;
+      const lutSelEl = document.getElementById("lut-select");
+      if (lutSelEl) lutSelEl.value = String(newLutId);
       fetchLutData(newLutId).then((d) => {
         activeLut = d;
         _sharpenCacheKey = -1;
@@ -1659,7 +1662,14 @@
       }).catch(() => {
         activeLut = null;
       });
+    } else if (_prevLutId) {
+      newLutId = _prevLutId;
+      const lutSelEl = document.getElementById("lut-select");
+      if (lutSelEl) lutSelEl.value = String(_prevLutId);
     } else {
+      state.lut_id = 0;
+      const lutSelEl = document.getElementById("lut-select");
+      if (lutSelEl) lutSelEl.value = "";
       activeLut = null;
     }
     applyVignetteOverlay();

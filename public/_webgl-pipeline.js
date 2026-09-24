@@ -226,6 +226,48 @@ void main() {
   fragColor = vec4(clamp(result, 0.0, 1.0), 1.0);
 }
 `;
+const LUT_ONLY_FRAG = `#version 300 es
+precision highp float;
+precision highp sampler3D;
+in vec2 vUv;
+out vec4 fragColor;
+uniform sampler2D uSource;
+uniform sampler3D uLut;
+uniform float uLutSize;
+uniform float uLutIntensity;
+
+vec3 sampleLUT(vec3 c) {
+  float s = uLutSize - 1.0;
+  vec3 uv = clamp(c, 0.0, 1.0) * s;
+  vec3 uv0 = floor(uv);
+  vec3 uv1 = ceil(uv);
+  vec3 f = uv - uv0;
+  vec3 c000 = texture(uLut, (uv0 + 0.5) / uLutSize).rgb;
+  vec3 c100 = texture(uLut, (vec3(uv1.x, uv0.y, uv0.z) + 0.5) / uLutSize).rgb;
+  vec3 c010 = texture(uLut, (vec3(uv0.x, uv1.y, uv0.z) + 0.5) / uLutSize).rgb;
+  vec3 c110 = texture(uLut, (vec3(uv1.x, uv1.y, uv0.z) + 0.5) / uLutSize).rgb;
+  vec3 c001 = texture(uLut, (vec3(uv0.x, uv0.y, uv1.z) + 0.5) / uLutSize).rgb;
+  vec3 c101 = texture(uLut, (vec3(uv1.x, uv0.y, uv1.z) + 0.5) / uLutSize).rgb;
+  vec3 c011 = texture(uLut, (vec3(uv0.x, uv1.y, uv1.z) + 0.5) / uLutSize).rgb;
+  vec3 c111 = texture(uLut, (vec3(uv1.x, uv1.y, uv1.z) + 0.5) / uLutSize).rgb;
+  vec3 c00 = mix(c000, c100, f.x);
+  vec3 c01 = mix(c001, c101, f.x);
+  vec3 c10 = mix(c010, c110, f.x);
+  vec3 c11 = mix(c011, c111, f.x);
+  vec3 c0 = mix(c00, c10, f.y);
+  vec3 c1 = mix(c01, c11, f.y);
+  return mix(c0, c1, f.z);
+}
+
+void main() {
+  vec4 src = texture(uSource, vUv);
+  vec3 c = src.rgb;
+  vec3 lutResult = sampleLUT(c);
+  float mixT = uLutIntensity;
+  // If no LUT loaded, force intensity 0 to avoid garbage from unbound sampler
+  fragColor = vec4(mix(c, lutResult, mixT), src.a);
+}
+`;
 const CURVE_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -490,6 +532,8 @@ function createWebGLPipeline() {
   let curveTex = null;
   let postCurveTex = null;
   let postCurveFbo = null;
+  let postLutTex = null;
+  let postLutFbo = null;
   let curveIsIdentity = true;
   let hslProg = null;
   let hslFbo = null;
@@ -623,6 +667,7 @@ function createWebGLPipeline() {
   let blurVProg = null;
   let unsharpProg = null;
   let curveProg = null;
+  let lutOnlyProg = null;
   let quadVao = null;
   let sourceTex = null;
   let lutTex = null;
@@ -780,6 +825,7 @@ function createWebGLPipeline() {
       blurVProg = createProgram(VERT_SRC, BLUR_V_FRAG);
       unsharpProg = createProgram(VERT_SRC, UNSHARP_FRAG);
       curveProg = createProgram(VERT_SRC, CURVE_FRAG);
+      lutOnlyProg = createProgram(VERT_SRC, LUT_ONLY_FRAG);
       hslProg = createProgram(VERT_SRC, HSL_FRAG);
       calibProg = createProgram(VERT_SRC, CALIBRATION_FRAG);
       setupQuad();
@@ -949,10 +995,7 @@ function createWebGLPipeline() {
       gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
       gl.uniform1i(gl.getUniformLocation(p, "uLut"), 1);
       gl.uniform1f(gl.getUniformLocation(p, "uLutSize"), 32);
-      gl.uniform1f(
-        gl.getUniformLocation(p, "uLutIntensity"),
-        lutTex ? Math.max(0, Math.min(1, lastState.lut_intensity / 100)) : 0
-      );
+      gl.uniform1f(gl.getUniformLocation(p, "uLutIntensity"), 0);
       gl.uniform1f(gl.getUniformLocation(p, "uExposure"), lastState.exposure);
       gl.uniform1f(gl.getUniformLocation(p, "uContrast"), lastState.contrast);
       gl.uniform1f(gl.getUniformLocation(p, "uBrightness"), lastState.brightness);
@@ -1009,6 +1052,38 @@ function createWebGLPipeline() {
         gl.uniform1i(gl.getUniformLocation(p, "uHasCurve"), curveIsIdentity ? 0 : 1);
       }, postCurveFbo, w, h);
     }
+    const lutIntensity01 = lutTex ? Math.max(0, Math.min(1, lastState.lut_intensity / 100)) : 0;
+    const hasLutToApply = lutTex && lutIntensity01 > 0 && lutOnlyProg;
+    if (hasLutToApply) {
+      if (!postLutFbo || !postLutTex || postLutTex.width !== w || postLutTex.height !== h) {
+        if (postLutTex) gl.deleteTexture(postLutTex);
+        if (postLutFbo) gl.deleteFramebuffer(postLutFbo);
+        postLutTex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, postLutTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        postLutFbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, postLutFbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.GL_TEXTURE_2D, postLutTex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, postCurveTex || curveTex);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_3D, lutTex);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, postLutFbo);
+      gl.viewport(0, 0, w, h);
+      runPass(lutOnlyProg, () => {
+        const p = lutOnlyProg;
+        gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
+        gl.uniform1i(gl.getUniformLocation(p, "uLut"), 1);
+        gl.uniform1f(gl.getUniformLocation(p, "uLutSize"), 32);
+        gl.uniform1f(gl.getUniformLocation(p, "uLutIntensity"), lutIntensity01);
+      }, postLutFbo, w, h);
+    }
     if (!isEffectsFlat() && hslProg) {
       if (!hslFbo || !hslTex || hslTex.width !== w || hslTex.height !== h) {
         if (hslTex) gl.deleteTexture(hslTex);
@@ -1026,7 +1101,7 @@ function createWebGLPipeline() {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       }
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, postCurveTex || curveTex);
+      gl.bindTexture(gl.TEXTURE_2D, hasLutToApply && postLutTex ? postLutTex : postCurveTex || curveTex);
       runPass(hslProg, () => {
         const p = hslProg;
         gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);

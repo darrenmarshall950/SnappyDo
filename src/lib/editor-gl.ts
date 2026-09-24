@@ -286,6 +286,54 @@ void main() {
 `;
 
 
+// ─── LUT-only fragment shader ──────────────────────────────────────────────
+// Standalone 3D LUT application pass. Used to apply LUT AFTER curve and
+// HSL/ST/grain/calibration rather than bundled into Pass 1, so the canvas
+// pipeline order matches the server renderWithSharp() pipeline order.
+const LUT_ONLY_FRAG = `#version 300 es
+precision highp float;
+precision highp sampler3D;
+in vec2 vUv;
+out vec4 fragColor;
+uniform sampler2D uSource;
+uniform sampler3D uLut;
+uniform float uLutSize;
+uniform float uLutIntensity;
+
+vec3 sampleLUT(vec3 c) {
+  float s = uLutSize - 1.0;
+  vec3 uv = clamp(c, 0.0, 1.0) * s;
+  vec3 uv0 = floor(uv);
+  vec3 uv1 = ceil(uv);
+  vec3 f = uv - uv0;
+  vec3 c000 = texture(uLut, (uv0 + 0.5) / uLutSize).rgb;
+  vec3 c100 = texture(uLut, (vec3(uv1.x, uv0.y, uv0.z) + 0.5) / uLutSize).rgb;
+  vec3 c010 = texture(uLut, (vec3(uv0.x, uv1.y, uv0.z) + 0.5) / uLutSize).rgb;
+  vec3 c110 = texture(uLut, (vec3(uv1.x, uv1.y, uv0.z) + 0.5) / uLutSize).rgb;
+  vec3 c001 = texture(uLut, (vec3(uv0.x, uv0.y, uv1.z) + 0.5) / uLutSize).rgb;
+  vec3 c101 = texture(uLut, (vec3(uv1.x, uv0.y, uv1.z) + 0.5) / uLutSize).rgb;
+  vec3 c011 = texture(uLut, (vec3(uv0.x, uv1.y, uv1.z) + 0.5) / uLutSize).rgb;
+  vec3 c111 = texture(uLut, (vec3(uv1.x, uv1.y, uv1.z) + 0.5) / uLutSize).rgb;
+  vec3 c00 = mix(c000, c100, f.x);
+  vec3 c01 = mix(c001, c101, f.x);
+  vec3 c10 = mix(c010, c110, f.x);
+  vec3 c11 = mix(c011, c111, f.x);
+  vec3 c0 = mix(c00, c10, f.y);
+  vec3 c1 = mix(c01, c11, f.y);
+  return mix(c0, c1, f.z);
+}
+
+void main() {
+  vec4 src = texture(uSource, vUv);
+  vec3 c = src.rgb;
+  vec3 lutResult = sampleLUT(c);
+  float mixT = uLutIntensity;
+  // If no LUT loaded, force intensity 0 to avoid garbage from unbound sampler
+  fragColor = vec4(mix(c, lutResult, mixT), src.a);
+}
+`;
+
+
 // ─── Curve pass fragment shader ────────────────────────────────────────────
 // Per-channel tone curves using three 256x1 2D textures as 1D LUTs.
 // Applied AFTER sliders-LUT pass (linear-light position, before saturation).
@@ -666,6 +714,8 @@ export function createWebGLPipeline(): WebGLPipeline {
   let curveTex: WebGLTexture | null = null;   // RGBA8, canvas size
   let postCurveTex: WebGLTexture | null = null; // RGBA8, holds pass-2 (curve) output
   let postCurveFbo: WebGLFramebuffer | null = null;
+  let postLutTex: WebGLTexture | null = null; // RGBA8, holds post-LUT output
+  let postLutFbo: WebGLFramebuffer | null = null;
   // True when all channels are identity — skips the curve pass.
   let curveIsIdentity = true;
 
@@ -816,6 +866,7 @@ export function createWebGLPipeline(): WebGLPipeline {
   let blurVProg: WebGLProgram | null = null;
   let unsharpProg: WebGLProgram | null = null;
   let curveProg: WebGLProgram | null = null;
+  let lutOnlyProg: WebGLProgram | null = null;
 
   // Vertex array for full-screen quad
   let quadVao: WebGLVertexArrayObject | null = null;
@@ -970,6 +1021,7 @@ export function createWebGLPipeline(): WebGLPipeline {
       blurVProg = createProgram(VERT_SRC, BLUR_V_FRAG);
       unsharpProg = createProgram(VERT_SRC, UNSHARP_FRAG);
       curveProg = createProgram(VERT_SRC, CURVE_FRAG);
+      lutOnlyProg = createProgram(VERT_SRC, LUT_ONLY_FRAG);
       hslProg = createProgram(VERT_SRC, HSL_FRAG);
       calibProg = createProgram(VERT_SRC, CALIBRATION_FRAG);
 
@@ -1185,12 +1237,10 @@ export function createWebGLPipeline(): WebGLPipeline {
       gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
       gl.uniform1i(gl.getUniformLocation(p, 'uLut'), 1);
       gl.uniform1f(gl.getUniformLocation(p, 'uLutSize'), 32);
-      // If no LUT is loaded (texture is null), force intensity to 0 so
-      // mix(adjusted, lutResult, 0) = adjusted (passthrough). With no LUT
-      // bound, sampling TEXTURE_3D returns garbage, making high intensities
-      // produce black output instead of just being a no-op.
-      gl.uniform1f(gl.getUniformLocation(p, 'uLutIntensity'),
-        lutTex ? Math.max(0, Math.min(1, lastState.lut_intensity / 100)) : 0);
+      // LUT is no longer applied here in Pass 1. It's applied AFTER the
+      // tone-curve pass (Pass 2.5) so the canvas pipeline order matches the
+      // server renderWithSharp() pipeline (curve before LUT).
+      gl.uniform1f(gl.getUniformLocation(p, 'uLutIntensity'), 0);
       gl.uniform1f(gl.getUniformLocation(p, 'uExposure'), lastState.exposure);
       gl.uniform1f(gl.getUniformLocation(p, 'uContrast'), lastState.contrast);
       gl.uniform1f(gl.getUniformLocation(p, 'uBrightness'), lastState.brightness);
@@ -1254,6 +1304,45 @@ export function createWebGLPipeline(): WebGLPipeline {
       }, postCurveFbo, w, h);
     }
 
+    // ── Pass 2.5: LUT → postLutFbo (after curve, before HSL/grain/etc.) ─────────
+    // Canvas applies LUT here, AFTER curve, matching the server renderWithSharp
+    // pipeline order (sliders → HSWB → ... → curve → ... → LUT → vignette).
+    // Without this, the canvas would apply LUT to the un-curved image, while
+    // the server applies it to the curved image — for extreme curves this
+    // divergence can produce near-black saves.
+    const lutIntensity01 = lutTex ? Math.max(0, Math.min(1, lastState.lut_intensity / 100)) : 0;
+    const hasLutToApply = lutTex && lutIntensity01 > 0 && lutOnlyProg;
+    if (hasLutToApply) {
+      if (!postLutFbo || !postLutTex || postLutTex.width !== w || postLutTex.height !== h) {
+        if (postLutTex) gl.deleteTexture(postLutTex);
+        if (postLutFbo) gl.deleteFramebuffer(postLutFbo);
+        postLutTex = gl.createTexture()!;
+        gl.bindTexture(gl.TEXTURE_2D, postLutTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        postLutFbo = gl.createFramebuffer()!;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, postLutFbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.GL_TEXTURE_2D, postLutTex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, postCurveTex || curveTex);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_3D, lutTex);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, postLutFbo);
+      gl.viewport(0, 0, w, h);
+      runPass(lutOnlyProg!, () => {
+        const p = lutOnlyProg!;
+        gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
+        gl.uniform1i(gl.getUniformLocation(p, 'uLut'), 1);
+        gl.uniform1f(gl.getUniformLocation(p, 'uLutSize'), 32);
+        gl.uniform1f(gl.getUniformLocation(p, 'uLutIntensity'), lutIntensity01);
+      }, postLutFbo, w, h);
+    }
+
     // ── Pass 3: HSL Color Mixer + Color Grading → canvas ───────────────────
     if (!isEffectsFlat() && hslProg) {
       // Lazy-allocate hslFBO at canvas size (not needed but keeps structure)
@@ -1273,11 +1362,10 @@ export function createWebGLPipeline(): WebGLPipeline {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       }
 
-      // Source for hsl pass: read from postCurveTex which holds pass 2's
-      // curve-applied output. Previously this read from curveTex (pass 1 only),
-      // which silently dropped the tone curve whenever grain/dehaze was on.
+      // Source for hsl pass: read from postLutTex (after LUT) if LUT was applied,
+      // else postCurveTex (just curve).
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, postCurveTex || curveTex);
+      gl.bindTexture(gl.TEXTURE_2D, (hasLutToApply && postLutTex) ? postLutTex : (postCurveTex || curveTex));
       runPass(hslProg, () => {
         const p = hslProg!;
         gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);

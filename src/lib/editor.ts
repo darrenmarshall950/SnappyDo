@@ -1887,6 +1887,11 @@ webglPipeline.render();
         if (!params) return;
         // Stamp the preset id first so downstream UI updates see it.
         if (presetId != null) (state as any).preset_id = Number(presetId);
+        // Capture any manually selected LUT BEFORE we touch state.lut_id.
+        // If the preset has no LUT, we restore the manual one — a preset
+        // without a LUT shouldn't clear the user's LUT selection.
+        const _prevLutId = state.lut_id || 0;
+        const _presetHasLut = !!(params.lut_id && Number(params.lut_id));
         // 1. Restore all scalar sliders via the existing helper.
         for (const k of PRESET_SLIDER_KEYS) {
           if (k in params) setSliderValue(k, Number(params[k]) || 0);
@@ -1999,18 +2004,32 @@ webglPipeline.render();
           }
         }
         // 6. LUT — set the dropdown and (async) load the data.
-        const newLutId = params.lut_id ? Number(params.lut_id) : 0;
-        state.lut_id = newLutId;
-        const lutSelEl = document.getElementById('lut-select');
-        if (lutSelEl) lutSelEl.value = newLutId ? String(newLutId) : '';
-        if (newLutId) {
+        // If the preset has its own LUT, replace whatever was there.
+        // If the preset has NO LUT, keep the user's manual LUT (and keep
+        // its data loaded) so preset + LUT can coexist.
+        let newLutId = 0;
+        if (_presetHasLut) {
+          newLutId = Number(params.lut_id);
+          state.lut_id = newLutId;
+          const lutSelEl = document.getElementById('lut-select');
+          if (lutSelEl) lutSelEl.value = String(newLutId);
           fetchLutData(newLutId).then((d) => {
             activeLut = d;
             _sharpenCacheKey = -1;
             applyVignetteOverlay();
             draw();
           }).catch(() => { activeLut = null; });
+        } else if (_prevLutId) {
+          // Preset has no LUT — preserve the user's manual LUT.
+          newLutId = _prevLutId;
+          // state.lut_id already set; ensure dropdown matches
+          const lutSelEl = document.getElementById('lut-select');
+          if (lutSelEl) lutSelEl.value = String(_prevLutId);
         } else {
+          // No preset LUT, no manual LUT — clear
+          state.lut_id = 0;
+          const lutSelEl = document.getElementById('lut-select');
+          if (lutSelEl) lutSelEl.value = '';
           activeLut = null;
         }
         applyVignetteOverlay();
