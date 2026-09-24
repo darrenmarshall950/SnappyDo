@@ -1051,6 +1051,14 @@
     state.crop = null;
     cropBox = null;
     currentAspect = null;
+    state.preset_id = void 0;
+    state.lut_id = 0;
+    activeLut = null;
+    const presetSelEl = document.getElementById("preset-select");
+    if (presetSelEl) presetSelEl.value = "";
+    const lutSelEl = document.getElementById("lut-select");
+    if (lutSelEl) lutSelEl.value = "";
+    if (typeof updateDeletePresetButton === "function") updateDeletePresetButton();
     document.querySelectorAll(".slider").forEach((wrap) => {
       const input = wrap.querySelector("input");
       const valEl = wrap.querySelector(".val");
@@ -1249,6 +1257,14 @@
     } catch (e) {
       console.warn("loadPresets failed", e);
     }
+    try {
+      const sel2 = document.getElementById("preset-select");
+      if (sel2 && state && state.preset_id) {
+        sel2.value = String(state.preset_id);
+        if (typeof updateDeletePresetButton === "function") updateDeletePresetButton();
+      }
+    } catch {
+    }
   }
   function sortLutsForDisplay(luts) {
     const rank = { builtin: 0, uploaded: 1, synthesised: 2 };
@@ -1306,6 +1322,18 @@
     lutSelect.addEventListener("change", async () => {
       const v = lutSelect.value;
       state.lut_id = v ? Number(v) : 0;
+      const presetSelectEl = document.getElementById("preset-select");
+      if (state.lut_id && state.preset_id) {
+        const activePreset = (window.__snappydoPresets || []).find((x) => Number(x.id) === Number(state.preset_id));
+        const presetLutId = activePreset && activePreset.params && activePreset.params.lut_id ? Number(activePreset.params.lut_id) : 0;
+        if (presetLutId > 0) {
+          const presetName = activePreset ? activePreset.name : "Preset " + state.preset_id;
+          if (presetSelectEl) presetSelectEl.value = "";
+          state.preset_id = void 0;
+          updateDeletePresetButton();
+          setStatus('Removed preset "' + presetName + '" because it includes a LUT and you changed the LUT.', false);
+        }
+      }
       if (state.lut_id) {
         if (!state.lut_intensity) {
           state.lut_intensity = 80;
@@ -1349,7 +1377,22 @@
       if (!id) return;
       const p = (window.__snappydoPresets || []).find((x) => x.id === id);
       if (!p) return;
-      applyPresetToState(p.params);
+      const newLutId = p.params && p.params.lut_id ? Number(p.params.lut_id) : 0;
+      const prevLutId = state.lut_id || 0;
+      const willReplaceLut = newLutId > 0 && newLutId !== prevLutId;
+      const presetHasLut = newLutId > 0;
+      applyPresetToState(id, p);
+      if (willReplaceLut && prevLutId > 0) {
+        const newLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === newLutId);
+        const prevLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === prevLutId);
+        const newName = newLutMeta ? newLutMeta.name : "LUT " + newLutId;
+        const prevName = prevLutMeta ? prevLutMeta.name : "LUT " + prevLutId;
+        setStatus('Replaced LUT "' + prevName + '" with preset "' + newName + '"', false);
+      } else if (!presetHasLut && prevLutId > 0) {
+        const prevLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === prevLutId);
+        const prevName = prevLutMeta ? prevLutMeta.name : "LUT " + prevLutId;
+        setStatus('Preset loaded \u2014 keeping manual LUT "' + prevName + '"', false);
+      }
     });
   }
   var btnDeletePreset = document.getElementById("btn-delete-preset");
@@ -1493,8 +1536,9 @@
     pointer.setAttribute("cx", String(px));
     pointer.setAttribute("cy", String(py));
   }
-  function applyPresetToState(params) {
+  function applyPresetToState(presetId, params) {
     if (!params) return;
+    if (presetId != null) state.preset_id = Number(presetId);
     for (const k of PRESET_SLIDER_KEYS) {
       if (k in params) setSliderValue(k, Number(params[k]) || 0);
     }
@@ -2892,6 +2936,29 @@
     window.addEventListener("resize", renderSpotOverlay);
   }
   _cvInit();
+  try {
+    const savedCurve = window.__EDITOR_DATA__?.initialParams?.curve || state?.curve;
+    if (savedCurve && typeof savedCurve === "object" && window._cvData) {
+      const cv = window._cvData;
+      ["rgb", "r", "g", "b"].forEach((ch) => {
+        if (Array.isArray(savedCurve[ch])) {
+          cv[ch] = savedCurve[ch].filter((p) => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p) => [Number(p[0]), Number(p[1])]);
+          if (cv[ch].length === 0 || cv[ch][0][0] !== 0) cv[ch].unshift([0, 0]);
+          if (cv[ch][cv[ch].length - 1][0] !== 255) cv[ch].push([255, 255]);
+          cv[ch].sort((a, b) => a[0] - b[0]);
+        }
+      });
+      const savedCh = window.__EDITOR_DATA__?.initialParams?.curveCh || state?.curveCh;
+      if (savedCh && typeof window.setCvCh === "function") {
+        window.setCvCh(savedCh);
+      }
+      if (typeof window._cvSync === "function") window._cvSync();
+      if (typeof window._cvRefresh === "function") window._cvRefresh();
+      if (typeof draw === "function") draw();
+    }
+  } catch (e) {
+    console.warn("curve hydrate failed", e);
+  }
   _histStart();
   setStatus("Editor ready.");
 })();

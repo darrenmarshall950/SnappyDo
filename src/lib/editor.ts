@@ -1315,6 +1315,18 @@ webglPipeline.render();
         state.crop = null;
         cropBox = null;
         currentAspect = null;
+        // Also clear preset + LUT linkage so the saved state is fully clean.
+        // Without this, state could still have a stale preset_id with all
+        // sliders=0 — Daz flagged this as a "preset selected but nothing
+        // applied" mismatch on reopen after a revert+save.
+        (state as any).preset_id = undefined;
+        state.lut_id = 0;
+        activeLut = null;
+        const presetSelEl = document.getElementById('preset-select') as HTMLSelectElement | null;
+        if (presetSelEl) presetSelEl.value = '';
+        const lutSelEl = document.getElementById('lut-select') as HTMLSelectElement | null;
+        if (lutSelEl) lutSelEl.value = '';
+        if (typeof updateDeletePresetButton === 'function') updateDeletePresetButton();
         document.querySelectorAll('.slider').forEach((wrap) => {
           const input = wrap.querySelector('input');
           const valEl = wrap.querySelector('.val');
@@ -1626,6 +1638,26 @@ webglPipeline.render();
         lutSelect.addEventListener('change', async () => {
           const v = lutSelect.value;
           state.lut_id = v ? Number(v) : 0;
+
+          // If a preset is active and that preset has its own LUT, clearing
+          // the active preset keeps the LUT actually shown on the canvas in
+          // sync with what will be saved (otherwise state would have
+          // preset_id=N plus a different lut_id, which Daz flagged as a
+          // LUT loaded but preset is wrong mismatch on reopen).
+          const presetSelectEl = document.getElementById('preset-select') as HTMLSelectElement | null;
+          if (state.lut_id && state.preset_id) {
+            const activePreset = (window.__snappydoPresets || []).find((x: any) => Number(x.id) === Number(state.preset_id));
+            const presetLutId = activePreset && activePreset.params && activePreset.params.lut_id ? Number(activePreset.params.lut_id) : 0;
+            if (presetLutId > 0) {
+              // Preset has a LUT — manual LUT change removes the preset.
+              const presetName = activePreset ? activePreset.name : ('Preset ' + state.preset_id);
+              if (presetSelectEl) presetSelectEl.value = '';
+              (state as any).preset_id = undefined;
+              updateDeletePresetButton();
+              setStatus('Removed preset "' + presetName + '" because it includes a LUT and you changed the LUT.', false);
+            }
+          }
+
           if (state.lut_id) {
             // First-time select: nudge intensity to 80 if it's still at 0
             // so the user actually sees the effect immediately.
@@ -1674,7 +1706,28 @@ webglPipeline.render();
           if (!id) return;
           const p = (window.__snappydoPresets || []).find((x) => x.id === id);
           if (!p) return;
-          applyPresetToState(p.params);
+
+          // Detect LUT replacement BEFORE we apply, so we can notify.
+          const newLutId = p.params && p.params.lut_id ? Number(p.params.lut_id) : 0;
+          const prevLutId = state.lut_id || 0;
+          const willReplaceLut = newLutId > 0 && newLutId !== prevLutId;
+          const presetHasLut = newLutId > 0;
+
+          applyPresetToState(id, p);
+
+          // Notify user about LUT interactions
+          if (willReplaceLut && prevLutId > 0) {
+            const newLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === newLutId);
+            const prevLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === prevLutId);
+            const newName = newLutMeta ? newLutMeta.name : ('LUT ' + newLutId);
+            const prevName = prevLutMeta ? prevLutMeta.name : ('LUT ' + prevLutId);
+            setStatus('Replaced LUT "' + prevName + '" with preset "' + newName + '"', false);
+          } else if (!presetHasLut && prevLutId > 0) {
+            // Preset has no LUT — keep manual LUT, notify user
+            const prevLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === prevLutId);
+            const prevName = prevLutMeta ? prevLutMeta.name : ('LUT ' + prevLutId);
+            setStatus('Preset loaded — keeping manual LUT "' + prevName + '"', false);
+          }
         });
       }
 
@@ -1827,8 +1880,13 @@ webglPipeline.render();
       }
 
       // Restore all state from a preset's params object.
-      function applyPresetToState(params: any) {
+      //  (optional) — when provided, also stamps state.preset_id so
+      // the preset can be re-selected on reopen and cleared when the user
+      // changes the LUT manually.
+      function applyPresetToState(presetId: any, params: any) {
         if (!params) return;
+        // Stamp the preset id first so downstream UI updates see it.
+        if (presetId != null) (state as any).preset_id = Number(presetId);
         // 1. Restore all scalar sliders via the existing helper.
         for (const k of PRESET_SLIDER_KEYS) {
           if (k in params) setSliderValue(k, Number(params[k]) || 0);
