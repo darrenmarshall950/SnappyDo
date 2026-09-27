@@ -660,6 +660,26 @@ import { isFlat } from "./curve";
         }
       }
 
+      // Dehaze per-pixel helper for the legacy 2D path. Mirrors the WebGL
+      // shader (editor-gl.ts HSL_FRAG dehaze block) so the slider keeps
+      // doing something on iOS / WebGL2-unavailable / WebGL-init-failed
+      // browsers. Algorithm:
+      //   haze = min(r,g,b) / 255
+      //   hazeAmount = dehaze * 0.003 * haze
+      //   out = (in/255 - hazeAmount) * 255
+      function applyDehazeToRgba(data, dehaze) {
+        if (!dehaze) return;
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const haze = Math.min(r, Math.min(g, b)) / 255;
+          const hazeAmount = dehaze * 0.003 * haze;
+          data[i]     = Math.max(0, Math.min(255, Math.round((r / 255 - hazeAmount) * 255)));
+          data[i + 1] = Math.max(0, Math.min(255, Math.round((g / 255 - hazeAmount) * 255)));
+          data[i + 2] = Math.max(0, Math.min(255, Math.round((b / 255 - hazeAmount) * 255)));
+          // alpha unchanged
+        }
+      }
+
       // ---- Legacy 2D pipeline (preserved for fallback and iOS) ----
       function drawLegacy() {
         if (!sourceImage.complete || !sourceImage.naturalWidth) return;
@@ -711,7 +731,8 @@ import { isFlat } from "./curve";
         const hasSharpen = state.sharpen > 0;
         const hasLut = !!(activeLut && state.lut_id && state.lut_intensity > 0);
         const hasFilterWork = !isIOS && computeFilters({ temp: previewTemp, tint: previewTint }) !== '';
-        const needsPixelPass = hasSliderWork || hasLut;
+        const hasDehaze = (state.dehaze || 0) !== 0;
+        const needsPixelPass = hasSliderWork || hasLut || hasDehaze;
         const needsFullPipeline = hasSharpen || needsPixelPass || hasFilterWork;
 
         if (!needsFullPipeline) {
@@ -732,6 +753,9 @@ import { isFlat } from "./curve";
               if (hasLut) {
                 const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
                 applyLutToRgba(activeLut, data, mix);
+              }
+              if (hasDehaze) {
+                applyDehazeToRgba(data, state.dehaze || 0);
               }
               ctx.putImageData(imgData, 0, 0);
             } catch (e) {
@@ -757,6 +781,15 @@ import { isFlat } from "./curve";
               });
             } catch (e) {
               console.warn('LUT pass failed:', e);
+            }
+          }
+          if (hasDehaze) {
+            try {
+              const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              applyDehazeToRgba(imgData.data, state.dehaze || 0);
+              ctx.putImageData(imgData, 0, 0);
+            } catch (e) {
+              console.warn('Dehaze pass failed:', e);
             }
           }
         }
@@ -997,17 +1030,37 @@ webglPipeline.render();
       }
 
             // ---- Unified draw dispatcher ----
+      // If the WebGL pipeline is unavailable (no WebGL2 context, shader
+      // compile failure, init returned false, etc.) we fall through to
+      // drawLegacy() so the user still sees their edits. Without this
+      // fallback, drawWebGL() returning false silently leaves the canvas
+      // showing the pre-edit image and slider/preset changes appear to
+      // do nothing. The first draw (pipeline still loading) also falls
+      // through to drawLegacy on the await rejection, then draw() runs
+      // again once the WebGL pipeline is ready.
       function draw() {
 
         if (!sourceImage.complete || !sourceImage.naturalWidth) return;
         if (useWebGL) {
-          drawWebGL();
-          applyVignetteOverlay();
-          drawCropOverlayDom();
-          try { if ((window as any).updateCropDims) (window as any).updateCropDims(); } catch(e) {}
+          drawWebGL().then((ok) => {
+            if (!ok) {
+              drawLegacy();
+            }
+            applyVignetteOverlay();
+            drawCropOverlayDom();
+            try { if ((window as any).updateCropDims) (window as any).updateCropDims(); } catch(e) {}
+          }).catch((err) => {
+            console.warn('drawWebGL threw, falling back to legacy:', err);
+            try { drawLegacy(); } catch (e2) { console.error('drawLegacy also failed:', e2); }
+            applyVignetteOverlay();
+            drawCropOverlayDom();
+            try { if ((window as any).updateCropDims) (window as any).updateCropDims(); } catch(e) {}
+          });
           return;
         }
         drawLegacy();
+        applyVignetteOverlay();
+        drawCropOverlayDom();
         try { if ((window as any).updateCropDims) (window as any).updateCropDims(); } catch(e) {}
       }
 

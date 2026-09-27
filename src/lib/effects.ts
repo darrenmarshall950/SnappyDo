@@ -550,3 +550,40 @@ export function applyToneCurveToRgb(
     Math.max(0, Math.min(255, Math.round(bo * 255))),
   ];
 }
+
+// ─── Dehaze ───────────────────────────────────────────────────────────────
+// Lightroom-style dehaze approximation. The WebGL pipeline does this in a
+// shader (see editor-gl.ts HSL_FRAG dehaze block); this is the legacy 2D
+// path equivalent so the slider keeps doing something on iOS / WebGL2-
+// unavailable browsers. Not pixel-identical to the GPU version but it
+// produces a visible effect that responds to slider input.
+//
+// Algorithm (mirrors the WebGL shader):
+//   haze = min(r, g, b) / 255
+//   hazeAmount = dehaze * 0.003 * haze
+//   out = (in / 255 - hazeAmount) * 255
+// Dehaze is anti-symmetric so positive values reduce haze (boost contrast
+// in flat areas) and negative values add haze (mild fog).
+export function applyDehazeToRgb(
+  r: number, g: number, b: number, dehaze: number,
+): [number, number, number] {
+  if (!dehaze) return [r, g, b];
+  const haze = Math.min(r, Math.min(g, b)) / 255;
+  const hazeAmount = dehaze * 0.003 * haze;
+  const out = (c: number) => Math.max(0, Math.min(255, Math.round((c / 255 - hazeAmount) * 255)));
+  return [out(r), out(g), out(b)];
+}
+
+// Per-pixel buffer variant for the legacy 2D path.
+export function applyDehazeToRgba(data: Uint8ClampedArray, dehaze: number): void {
+  if (!dehaze) return;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const haze = Math.min(r, Math.min(g, b)) / 255;
+    const hazeAmount = dehaze * 0.003 * haze;
+    data[i]     = Math.max(0, Math.min(255, Math.round((r / 255 - hazeAmount) * 255)));
+    data[i + 1] = Math.max(0, Math.min(255, Math.round((g / 255 - hazeAmount) * 255)));
+    data[i + 2] = Math.max(0, Math.min(255, Math.round((b / 255 - hazeAmount) * 255)));
+    // alpha unchanged
+  }
+}
