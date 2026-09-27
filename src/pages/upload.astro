@@ -212,7 +212,7 @@ const galleries = listGalleries();
         <div class="dropzone__icon">⤴</div>
         <p class="dropzone__text">Drop photos here, or click to browse</p>
         <p class="dropzone__hint">JPEG, PNG, WebP, AVIF, HEIC, plus RAW (RW2, ORF, DNG, CR2, NEF, ARW, RAF...) · up to 100 MB each</p>
-        <input id="file-input" type="file" accept="image/*" multiple hidden />
+        <input id="file-input" type="file" accept="image/*,.rw2,.orf,.dng,.cr2,.cr3,.nef,.nrw,.arw,.srf,.sr2,.raf,.pef,.3fr,.iiq,.x3f,.mrw,.rwl" multiple hidden />
       </div>
 
       <div id="progress" class="progress">
@@ -477,8 +477,15 @@ const galleries = listGalleries();
                 return;
               }
 
-              // Filter out non-images
-              const allFiles = files.filter((f) => f.type.startsWith('image/'));
+              // Filter out non-images. The browser reports RAW camera files
+              // (Panasonic .rw2, Olympus .orf, etc.) with type === '' or
+              // 'application/octet-stream' because the OS doesn't assign a
+              // real MIME. We accept anything that looks like an image MIME
+              // OR has a known RAW extension so they don't get silently
+              // dropped before they reach the server.
+              const allFiles = files.filter((f) =>
+                f.type.startsWith('image/') || isRawFile(f)
+              );
               if (!allFiles.length) {
                 log('no images to upload', false);
                 return;
