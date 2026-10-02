@@ -816,11 +816,19 @@
     const badge = document.getElementById("lens-corrections-badge");
     if (badge) badge.style.display = lens ? "inline-block" : "none";
   }
+  var _webglWarned = false;
+  var _webglFailed = false;
   function draw() {
     if (!sourceImage.complete || !sourceImage.naturalWidth) return;
-    if (useWebGL) {
+    if (useWebGL && !_webglFailed) {
       drawWebGL().then((ok) => {
         if (!ok) {
+          if (!_webglWarned) {
+            setStatus("WebGL pipeline unavailable, using 2D fallback.", true);
+            _webglWarned = true;
+          }
+          _webglFailed = true;
+          useWebGL = false;
           drawLegacy();
         }
         applyVignetteOverlay();
@@ -831,6 +839,12 @@
         }
       }).catch((err) => {
         console.warn("drawWebGL threw, falling back to legacy:", err);
+        if (!_webglWarned) {
+          setStatus("WebGL pipeline failed, using 2D fallback.", true);
+          _webglWarned = true;
+        }
+        _webglFailed = true;
+        useWebGL = false;
         try {
           drawLegacy();
         } catch (e2) {

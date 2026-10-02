@@ -1029,7 +1029,7 @@ webglPipeline.render();
         if (badge) badge.style.display = lens ? 'inline-block' : 'none';
       }
 
-            // ---- Unified draw dispatcher ----
+      // ---- Unified draw dispatcher ----
       // If the WebGL pipeline is unavailable (no WebGL2 context, shader
       // compile failure, init returned false, etc.) we fall through to
       // drawLegacy() so the user still sees their edits. Without this
@@ -1038,12 +1038,25 @@ webglPipeline.render();
       // do nothing. The first draw (pipeline still loading) also falls
       // through to drawLegacy on the await rejection, then draw() runs
       // again once the WebGL pipeline is ready.
+      //
+      // Once WebGL has failed we set useWebGL=false permanently so subsequent
+      // draws skip the failing GPU path entirely and the user sees a one-time
+      // status message ("WebGL unavailable, using 2D fallback") instead of
+      // repeated silent fallback on every slider tick.
+      let _webglWarned = false;
+      let _webglFailed = false;
       function draw() {
 
         if (!sourceImage.complete || !sourceImage.naturalWidth) return;
-        if (useWebGL) {
+        if (useWebGL && !_webglFailed) {
           drawWebGL().then((ok) => {
             if (!ok) {
+              if (!_webglWarned) {
+                setStatus('WebGL pipeline unavailable, using 2D fallback.', true);
+                _webglWarned = true;
+              }
+              _webglFailed = true;
+              useWebGL = false;
               drawLegacy();
             }
             applyVignetteOverlay();
@@ -1051,6 +1064,12 @@ webglPipeline.render();
             try { if ((window as any).updateCropDims) (window as any).updateCropDims(); } catch(e) {}
           }).catch((err) => {
             console.warn('drawWebGL threw, falling back to legacy:', err);
+            if (!_webglWarned) {
+              setStatus('WebGL pipeline failed, using 2D fallback.', true);
+              _webglWarned = true;
+            }
+            _webglFailed = true;
+            useWebGL = false;
             try { drawLegacy(); } catch (e2) { console.error('drawLegacy also failed:', e2); }
             applyVignetteOverlay();
             drawCropOverlayDom();
