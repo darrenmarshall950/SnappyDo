@@ -28,13 +28,14 @@
   var btnSave = document.getElementById("btn-save");
   var btnRevert = document.getElementById("btn-revert");
   var btnReset = document.getElementById("btn-reset");
+  var isIOS = typeof navigator !== "undefined" && (/iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   var _origCanvas = document.getElementById("preview");
   var canvas = _origCanvas.cloneNode(false);
   _origCanvas.parentNode.replaceChild(canvas, _origCanvas);
   var ctx = null;
   var webglPipeline = null;
   var useWebGL = false;
-  var _gl2 = canvas.getContext("webgl2", {
+  var _gl2 = isIOS ? null : canvas.getContext("webgl2", {
     alpha: false,
     antialias: false,
     depth: false,
@@ -99,7 +100,6 @@
       if (typeof applyRawPreviewFx === "function") applyRawPreviewFx();
     });
   }
-  var isIOS = typeof navigator !== "undefined" && (/iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   function setStatus(msg, isErr) {
     statusEl.textContent = msg;
     statusEl.classList.toggle("error", !!isErr);

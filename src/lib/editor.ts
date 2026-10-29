@@ -30,6 +30,15 @@ import { isFlat } from "./curve";
       const btnRevert = document.getElementById('btn-revert');
       const btnReset = document.getElementById('btn-reset');
 
+      // iOS Safari / WKWebView has repeatedly produced black output in the
+      // multi-pass WebGL effects path. Choose the separately-tested 2D pixel
+      // pipeline before a canvas context is acquired; a canvas cannot switch
+      // from WebGL to 2D after the fact.
+      const isIOS = (typeof navigator !== 'undefined') && (
+        /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+      );
+
       // ---- Canvas setup with optional WebGL2 GPU pipeline ----
       // We must grab the right context type BEFORE any other code touches
       // the canvas — a canvas can hold only ONE rendering context. The
@@ -48,7 +57,7 @@ import { isFlat } from "./curve";
       let useWebGL = false;
 
       // Probe WebGL2 first.
-      const _gl2 = canvas.getContext('webgl2', {
+      const _gl2 = isIOS ? null : canvas.getContext('webgl2', {
         alpha: false, antialias: false, depth: false, stencil: false,
         preserveDrawingBuffer: true, premultipliedAlpha: false,
       });
@@ -120,15 +129,6 @@ import { isFlat } from "./curve";
           if (typeof applyRawPreviewFx === 'function') applyRawPreviewFx();
         });
       }
-
-      // iOS Safari / WKWebView silently ignores ctx.filter on canvas
-      // drawImage in many versions. Toggle the live-preview pipeline
-      // accordingly so the sliders actually respond on iPhone. Desktop
-      // and Chromium Android keep the fast GPU filter path.
-      const isIOS = (typeof navigator !== 'undefined') && (
-        /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-      );
 
       function setStatus(msg, isErr) {
         statusEl.textContent = msg;
