@@ -3114,7 +3114,6 @@ webglPipeline.render();
 
   function _cvSync() {
     const pipe = (window as any)._webgl;
-    if (!pipe?.ready) return;
     // The GPU curve shader only reads R/G/B LUT samples (uCurveR/G/B), not a
     // master rgb LUT. So when the user is editing the master rgb channel,
     // mirror its curve into the R/G/B channels. If the user later switches to
@@ -3128,8 +3127,14 @@ webglPipeline.render();
       _cvData.g = _cvData.rgb.slice();
       _cvData.b = _cvData.rgb.slice();
     }
-    pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
-    pipe.render();
+    if (pipe?.ready) {
+      pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
+      pipe.render();
+    }
+    // The WebGL renderer is disabled for reliability, so curve changes must
+    // explicitly redraw the shared 2D preview rather than waiting for another UI action.
+    scheduleDraw();
+    scheduleAuthoritativePreview();
   }
 
   function _cvRefresh() {
@@ -3221,6 +3226,7 @@ webglPipeline.render();
       const y = Math.max(0, Math.min(255, Math.round((sy-10)*255/200)));
       _cvData[_cvCh][_cvDrag.idx] = [x, y];
       _cvData[_cvCh].sort((a,b) => a[0]-b[0]);
+      _cvSync();
       _cvRefresh();
     });
 

@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const source = readFileSync(new URL('../src/lib/editor.ts', import.meta.url), 'utf8');
+const sync = source.match(/function _cvSync\(\) \{[\s\S]{0,1300}?\n  \}/);
+assert.ok(sync, 'tone-curve synchronizer must exist');
+assert.doesNotMatch(sync[0], /if \(!pipe\?\.ready\) return;/, 'curve sync must not stop when WebGL is deliberately disabled');
+assert.match(sync[0], /scheduleDraw\(\)/, 'curve sync must request a stable-renderer preview redraw');
+const move = source.match(/window\.addEventListener\('mousemove',[\s\S]{0,850}?\n    \}\);/);
+assert.ok(move, 'tone curve drag handler must exist');
+assert.match(move[0], /_cvSync\(\);/, 'dragging a curve point must redraw the image immediately');
+console.log('tone curve gestures redraw the stable preview without compare mode');

@@ -2724,14 +2724,17 @@
   }
   function _cvSync() {
     const pipe = window._webgl;
-    if (!pipe?.ready) return;
     if (_cvCh === "rgb") {
       _cvData.r = _cvData.rgb.slice();
       _cvData.g = _cvData.rgb.slice();
       _cvData.b = _cvData.rgb.slice();
     }
-    pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
-    pipe.render();
+    if (pipe?.ready) {
+      pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
+      pipe.render();
+    }
+    scheduleDraw();
+    scheduleAuthoritativePreview();
   }
   function _cvRefresh() {
     const path = document.getElementById("cv-path");
@@ -2826,6 +2829,7 @@
       const y = Math.max(0, Math.min(255, Math.round((sy - 10) * 255 / 200)));
       _cvData[_cvCh][_cvDrag.idx] = [x, y];
       _cvData[_cvCh].sort((a, b) => a[0] - b[0]);
+      _cvSync();
       _cvRefresh();
     });
     window.addEventListener("mouseup", () => {
