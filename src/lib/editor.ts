@@ -3153,10 +3153,6 @@ webglPipeline.render();
       pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
       pipe.render();
     }
-    // The WebGL renderer is disabled for reliability, so curve changes must
-    // explicitly redraw the shared 2D preview rather than waiting for another UI action.
-    scheduleDraw();
-    scheduleAuthoritativePreview();
   }
 
   function _cvRefresh() {
@@ -3221,9 +3217,11 @@ webglPipeline.render();
     if (!svg) return;
     const r = () => svg.getBoundingClientRect();
 
-    svg.addEventListener('pointerdown', (e: PointerEvent) => {
+    // Restore the established mouse gesture path. iOS delivers compatible mouse
+    // events here, while this avoids the pointer-capture regression introduced
+    // during the live-preview change.
+    svg.addEventListener('mousedown', (e: MouseEvent) => {
       e.preventDefault();
-      svg.setPointerCapture(e.pointerId);
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;
       const sy = (e.clientY - rect.top) * 220 / rect.height;
@@ -3232,15 +3230,11 @@ webglPipeline.render();
         const [x,y] = _cvData[_cvCh][i];
         if (Math.abs(_cvS(x)-sx) < 8 && Math.abs(_cvS(y)-sy) < 8) { hit = i; break; }
       }
-      if (hit >= 0) {
-        _cvDrag = { idx: hit };
-      } else {
-        const newIdx = _cvAddPt(sx, sy);
-        if (newIdx >= 0) _cvDrag = { idx: newIdx };
-      }
+      if (hit >= 0) _cvDrag = { idx: hit };
+      else { const newIdx = _cvAddPt(sx, sy); if (newIdx >= 0) _cvDrag = { idx: newIdx }; }
     });
 
-    svg.addEventListener('pointermove', (e: PointerEvent) => {
+    window.addEventListener('mousemove', (e: MouseEvent) => {
       if (!_cvDrag) return;
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;
@@ -3251,16 +3245,15 @@ webglPipeline.render();
       _cvData[_cvCh].sort((a,b) => a[0]-b[0]);
       _cvSync();
       _cvRefresh();
+      scheduleDraw();
     });
 
-    const endCurveDrag = (e: PointerEvent) => {
+    window.addEventListener('mouseup', () => {
       if (!_cvDrag) return;
       _cvDrag = null;
-      if (svg.hasPointerCapture(e.pointerId)) svg.releasePointerCapture(e.pointerId);
       _cvSync();
-    };
-    svg.addEventListener('pointerup', endCurveDrag);
-    svg.addEventListener('pointercancel', endCurveDrag);
+      scheduleAuthoritativePreview();
+    });
 
     svg.addEventListener('dblclick', (e: MouseEvent) => {
       const rect = r();

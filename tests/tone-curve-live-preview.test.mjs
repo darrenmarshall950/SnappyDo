@@ -4,8 +4,8 @@ const source = readFileSync(new URL('../src/lib/editor.ts', import.meta.url), 'u
 const sync = source.match(/function _cvSync\(\) \{[\s\S]{0,1300}?\n  \}/);
 assert.ok(sync, 'tone-curve synchronizer must exist');
 assert.doesNotMatch(sync[0], /if \(!pipe\?\.ready\) return;/, 'curve sync must not stop when WebGL is deliberately disabled');
-assert.match(sync[0], /scheduleDraw\(\)/, 'curve sync must request a stable-renderer preview redraw');
-const move = source.match(/svg\.addEventListener\('pointermove',[\s\S]{0,850}?\n    \}\);/);
-assert.ok(move, 'tone curve pointer drag handler must exist');
-assert.match(move[0], /_cvSync\(\);/, 'dragging a curve point must redraw the image immediately');
+assert.doesNotMatch(sync[0], /scheduleDraw\(\)/, 'curve sync must not mutate the SVG gesture lifecycle');
+const move = source.match(/window\.addEventListener\('mousemove',[\s\S]{0,950}?\n    \}\);/);
+assert.ok(move, 'tone curve mouse drag handler must exist');
+assert.match(move[0], /_cvSync\(\);[\s\S]{0,120}_cvRefresh\(\);[\s\S]{0,120}scheduleDraw\(\);/, 'dragging a curve point must refresh the SVG then redraw the image immediately');
 console.log('tone curve gestures redraw the stable preview without compare mode');

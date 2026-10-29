@@ -2754,8 +2754,6 @@
       pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
       pipe.render();
     }
-    scheduleDraw();
-    scheduleAuthoritativePreview();
   }
   function _cvRefresh() {
     const path = document.getElementById("cv-path");
@@ -2821,9 +2819,8 @@
     const svg = document.getElementById("cv-svg");
     if (!svg) return;
     const r = () => svg.getBoundingClientRect();
-    svg.addEventListener("pointerdown", (e) => {
+    svg.addEventListener("mousedown", (e) => {
       e.preventDefault();
-      svg.setPointerCapture(e.pointerId);
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;
       const sy = (e.clientY - rect.top) * 220 / rect.height;
@@ -2835,14 +2832,13 @@
           break;
         }
       }
-      if (hit >= 0) {
-        _cvDrag = { idx: hit };
-      } else {
+      if (hit >= 0) _cvDrag = { idx: hit };
+      else {
         const newIdx = _cvAddPt(sx, sy);
         if (newIdx >= 0) _cvDrag = { idx: newIdx };
       }
     });
-    svg.addEventListener("pointermove", (e) => {
+    window.addEventListener("mousemove", (e) => {
       if (!_cvDrag) return;
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;
@@ -2853,15 +2849,14 @@
       _cvData[_cvCh].sort((a, b) => a[0] - b[0]);
       _cvSync();
       _cvRefresh();
+      scheduleDraw();
     });
-    const endCurveDrag = (e) => {
+    window.addEventListener("mouseup", () => {
       if (!_cvDrag) return;
       _cvDrag = null;
-      if (svg.hasPointerCapture(e.pointerId)) svg.releasePointerCapture(e.pointerId);
       _cvSync();
-    };
-    svg.addEventListener("pointerup", endCurveDrag);
-    svg.addEventListener("pointercancel", endCurveDrag);
+      scheduleAuthoritativePreview();
+    });
     svg.addEventListener("dblclick", (e) => {
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;

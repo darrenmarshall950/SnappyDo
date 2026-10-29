@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const source = readFileSync(new URL('../src/lib/editor.ts', import.meta.url), 'utf8');
+const init = source.match(/function _cvInit\(\) \{[\s\S]{0,4200}?\n  \}/);
+assert.ok(init, 'tone-curve interaction setup must exist');
+assert.match(init[0], /svg\.addEventListener\('mousedown'/, 'restore the known-working curve drag start handler');
+assert.match(init[0], /window\.addEventListener\('mousemove'/, 'restore the known-working curve drag movement handler');
+assert.match(init[0], /_cvRefresh\(\);\s*scheduleDraw\(\);/, 'the SVG must refresh before scheduling the image preview');
+const sync = source.match(/function _cvSync\(\) \{[\s\S]{0,1400}?\n  \}/);
+assert.ok(sync, 'curve synchronizer must exist');
+assert.doesNotMatch(sync[0], /scheduleDraw\(\)|scheduleAuthoritativePreview\(\)/, 'sync must only synchronize curve state; redraw scheduling belongs to the drag handler');
+console.log('tone curve preserves the known-working drag path and redraw separation');
