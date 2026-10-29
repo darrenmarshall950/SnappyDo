@@ -1399,7 +1399,26 @@ webglPipeline.render();
         const lutSelEl = document.getElementById('lut-select') as HTMLSelectElement | null;
         if (lutSelEl) lutSelEl.value = '';
         if (typeof updateDeletePresetButton === 'function') updateDeletePresetButton();
-        document.querySelectorAll('.slider').forEach((wrap) => {
+        let authoritativePreviewTimer = null;
+      let authoritativePreviewUrl = null;
+      async function scheduleAuthoritativePreview() {
+        clearTimeout(authoritativePreviewTimer);
+        authoritativePreviewTimer = setTimeout(async () => {
+          try {
+            const r = await fetch('/api/images/' + imageId + '/preview-edit', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({params: {...state, curve: _cvData}}) });
+            if (!r.ok) return;
+            const blob = await r.blob();
+            if (!blob.size) return;
+            const url = URL.createObjectURL(blob);
+            const probe = new Image();
+            probe.onload = () => { if (probe.naturalWidth && probe.naturalHeight) { const old=authoritativePreviewUrl; authoritativePreviewUrl=url; sourceImage.src=url; if(old) URL.revokeObjectURL(old); } else URL.revokeObjectURL(url); };
+            probe.onerror = () => URL.revokeObjectURL(url);
+            probe.src = url;
+          } catch (_) {}
+        }, 250);
+      }
+
+      document.querySelectorAll('.slider').forEach((wrap) => {
           const input = wrap.querySelector('input');
           const valEl = wrap.querySelector('.val');
           if (input) input.value = 0;
@@ -2163,6 +2182,7 @@ webglPipeline.render();
           applyVignetteOverlay();
           applyRawPreviewFx();
           scheduleDraw();
+          scheduleAuthoritativePreview();
           // RAW preview-render: re-fetch on slider-release (debounced 300ms).
           // Only fires if the slider is one of the RAW-only keys.
           if (RAW_KEYS.includes(key)) scheduleRawPreviewFetch('slider:' + key);

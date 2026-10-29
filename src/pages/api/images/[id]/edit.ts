@@ -67,7 +67,7 @@ function badRequest(msg: string) {
  * Returns the rendered JPEG buffer + the crop coordinates in source pixels
  * (so the DB row knows what crop was applied, for re-editing).
  */
-async function renderWithSharp(originalPath: string, params: any): Promise<{ buf: Buffer; appliedCrop: any | null }> {
+export async function renderWithSharp(originalPath: string, params: any): Promise<{ buf: Buffer; appliedCrop: any | null }> {
   const img = sharp(originalPath, { failOn: 'none' }).rotate(); // honour EXIF orientation
   const meta = await img.metadata();
   const W = meta.width || 0;

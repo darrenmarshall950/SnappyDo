@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { readFileSync, existsSync } from 'node:fs';
+const editPath = 'src/pages/api/images/[id]/edit.ts';
+const previewPath = 'src/pages/api/images/[id]/preview-edit.ts';
+const edit = readFileSync(editPath, 'utf8');
+const preview = existsSync(previewPath) ? readFileSync(previewPath, 'utf8') : '';
+assert.match(edit, /export async function renderWithSharp/);
+assert.match(preview, /renderWithSharp/);
+assert.match(preview, /application\/json/);
+assert.match(edit, /paramsObj/);
+console.log('server render authority assertions passed');
