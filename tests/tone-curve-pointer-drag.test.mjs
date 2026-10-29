@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const source = readFileSync(new URL('../src/lib/editor.ts', import.meta.url), 'utf8');
+const init = source.match(/function _cvInit\(\) \{[\s\S]{0,4200}?\n  \}/);
+assert.ok(init, 'tone-curve interaction setup must exist');
+assert.match(init[0], /svg\.addEventListener\('pointerdown'/, 'tone curve must begin drags with Pointer Events');
+assert.match(init[0], /svg\.addEventListener\('pointermove'/, 'tone curve must refresh while a pointer moves on touch and mouse devices');
+assert.match(init[0], /svg\.addEventListener\('pointerup'/, 'tone curve must end pointer drags on the SVG itself');
+assert.match(init[0], /setPointerCapture\(/, 'tone curve must retain the gesture when the pointer leaves the SVG');
+console.log('tone curve uses unified pointer drag events');

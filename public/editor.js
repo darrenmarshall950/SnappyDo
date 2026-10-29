@@ -541,6 +541,24 @@
       data[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b | 0;
     }
   }
+  function applyToneControlsToRgba(data, s) {
+    const smoothstep = (a, b, x) => {
+      const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+      return t * t * (3 - 2 * t);
+    };
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const lum = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+      let add = 0;
+      add += s.shadows / 100 * 0.5 * (1 - smoothstep(0, 0.35, lum)) * 255;
+      add += s.highlights / 100 * 0.5 * smoothstep(0.65, 1, lum) * 255;
+      add += s.whites / 100 * 0.3 * smoothstep(0.4, 1, lum) * 255;
+      add += s.blacks / 100 * 0.3 * (1 - smoothstep(0, 0.6, lum)) * 255;
+      data[i] = Math.max(0, Math.min(255, r + add));
+      data[i + 1] = Math.max(0, Math.min(255, g + add));
+      data[i + 2] = Math.max(0, Math.min(255, b + add));
+    }
+  }
   function applyDehazeToRgba(data, dehaze) {
     if (!dehaze) return;
     for (let i = 0; i < data.length; i += 4) {
@@ -595,7 +613,7 @@
       ctx.rect(cx, cy, cw, ch);
       ctx.clip();
     }
-    const hasSliderWork = isIOS && (state.exposure !== 0 || state.contrast !== 0 || state.brightness !== 0 || state.saturation !== 0 || previewTemp !== 0 || previewTint !== 0);
+    const hasSliderWork = isIOS && (state.exposure !== 0 || state.contrast !== 0 || state.brightness !== 0 || state.saturation !== 0 || previewTemp !== 0 || previewTint !== 0 || state.highlights !== 0 || state.shadows !== 0 || state.whites !== 0 || state.blacks !== 0);
     const hasSharpen = state.sharpen > 0;
     const hasLut = !!(activeLut && state.lut_id && state.lut_intensity > 0);
     const hasToneCurve = typeof _cvData !== "undefined" && !isFlat(_cvData);
@@ -614,7 +632,10 @@
         try {
           const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const data = imgData.data;
-          if (hasSliderWork) applySlidersToRgba(data, { ...state, temp: previewTemp, tint: previewTint });
+          if (hasSliderWork) {
+            applySlidersToRgba(data, { ...state, temp: previewTemp, tint: previewTint });
+            applyToneControlsToRgba(data, state);
+          }
           if (hasToneCurve) applyToneCurveToRgba(imgData.data, _cvData);
           if (hasLut) {
             const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
@@ -2800,8 +2821,9 @@
     const svg = document.getElementById("cv-svg");
     if (!svg) return;
     const r = () => svg.getBoundingClientRect();
-    svg.addEventListener("mousedown", (e) => {
+    svg.addEventListener("pointerdown", (e) => {
       e.preventDefault();
+      svg.setPointerCapture(e.pointerId);
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;
       const sy = (e.clientY - rect.top) * 220 / rect.height;
@@ -2820,7 +2842,7 @@
         if (newIdx >= 0) _cvDrag = { idx: newIdx };
       }
     });
-    window.addEventListener("mousemove", (e) => {
+    svg.addEventListener("pointermove", (e) => {
       if (!_cvDrag) return;
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;
@@ -2832,12 +2854,14 @@
       _cvSync();
       _cvRefresh();
     });
-    window.addEventListener("mouseup", () => {
-      if (_cvDrag) {
-        _cvDrag = null;
-        _cvSync();
-      }
-    });
+    const endCurveDrag = (e) => {
+      if (!_cvDrag) return;
+      _cvDrag = null;
+      if (svg.hasPointerCapture(e.pointerId)) svg.releasePointerCapture(e.pointerId);
+      _cvSync();
+    };
+    svg.addEventListener("pointerup", endCurveDrag);
+    svg.addEventListener("pointercancel", endCurveDrag);
     svg.addEventListener("dblclick", (e) => {
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;

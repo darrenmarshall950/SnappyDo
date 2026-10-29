@@ -665,6 +665,24 @@ import { isFlat, buildLut } from "./curve";
         }
       }
 
+      // Highlights, shadows, whites and blacks for the iOS 2D path.
+      // This mirrors the server renderer's luminance masks.
+      function applyToneControlsToRgba(data, s) {
+        const smoothstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const lum = (r * .299 + g * .587 + b * .114) / 255;
+          let add = 0;
+          add += (s.shadows / 100) * .5 * (1 - smoothstep(0, .35, lum)) * 255;
+          add += (s.highlights / 100) * .5 * smoothstep(.65, 1, lum) * 255;
+          add += (s.whites / 100) * .3 * smoothstep(.4, 1, lum) * 255;
+          add += (s.blacks / 100) * .3 * (1 - smoothstep(0, .6, lum)) * 255;
+          data[i] = Math.max(0, Math.min(255, r + add));
+          data[i + 1] = Math.max(0, Math.min(255, g + add));
+          data[i + 2] = Math.max(0, Math.min(255, b + add));
+        }
+      }
+
       // Dehaze per-pixel helper for the legacy 2D path. Mirrors the WebGL
       // shader (editor-gl.ts HSL_FRAG dehaze block) so the slider keeps
       // doing something on iOS / WebGL2-unavailable / WebGL-init-failed
@@ -748,7 +766,8 @@ import { isFlat, buildLut } from "./curve";
         //    for iOS, then apply LUT separately after.
         const hasSliderWork = isIOS && (
           state.exposure !== 0 || state.contrast !== 0 || state.brightness !== 0 ||
-          state.saturation !== 0 || previewTemp !== 0 || previewTint !== 0
+          state.saturation !== 0 || previewTemp !== 0 || previewTint !== 0 ||
+          state.highlights !== 0 || state.shadows !== 0 || state.whites !== 0 || state.blacks !== 0
         );
         const hasSharpen = state.sharpen > 0;
         const hasLut = !!(activeLut && state.lut_id && state.lut_intensity > 0);
@@ -772,7 +791,10 @@ import { isFlat, buildLut } from "./curve";
             try {
               const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
               const data = imgData.data;
-              if (hasSliderWork) applySlidersToRgba(data, { ...state, temp: previewTemp, tint: previewTint });
+              if (hasSliderWork) {
+                applySlidersToRgba(data, { ...state, temp: previewTemp, tint: previewTint });
+                applyToneControlsToRgba(data, state);
+              }
               if (hasToneCurve) applyToneCurveToRgba(imgData.data, _cvData);
               if (hasLut) {
                 const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
@@ -3199,8 +3221,9 @@ webglPipeline.render();
     if (!svg) return;
     const r = () => svg.getBoundingClientRect();
 
-    svg.addEventListener('mousedown', (e: MouseEvent) => {
+    svg.addEventListener('pointerdown', (e: PointerEvent) => {
       e.preventDefault();
+      svg.setPointerCapture(e.pointerId);
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;
       const sy = (e.clientY - rect.top) * 220 / rect.height;
@@ -3217,7 +3240,7 @@ webglPipeline.render();
       }
     });
 
-    window.addEventListener('mousemove', (e: MouseEvent) => {
+    svg.addEventListener('pointermove', (e: PointerEvent) => {
       if (!_cvDrag) return;
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;
@@ -3230,7 +3253,14 @@ webglPipeline.render();
       _cvRefresh();
     });
 
-    window.addEventListener('mouseup', () => { if (_cvDrag) { _cvDrag = null; _cvSync(); } });
+    const endCurveDrag = (e: PointerEvent) => {
+      if (!_cvDrag) return;
+      _cvDrag = null;
+      if (svg.hasPointerCapture(e.pointerId)) svg.releasePointerCapture(e.pointerId);
+      _cvSync();
+    };
+    svg.addEventListener('pointerup', endCurveDrag);
+    svg.addEventListener('pointercancel', endCurveDrag);
 
     svg.addEventListener('dblclick', (e: MouseEvent) => {
       const rect = r();
