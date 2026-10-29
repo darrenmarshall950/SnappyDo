@@ -1,6 +1,40 @@
 "use strict";
 (() => {
   // src/lib/curve.ts
+  var _identityLut = null;
+  function _getIdentityLut() {
+    if (_identityLut) return _identityLut;
+    _identityLut = new Float32Array(256);
+    for (let i = 0; i < 256; i++) _identityLut[i] = i / 255;
+    return _identityLut;
+  }
+  function buildLut(ch) {
+    if (!ch || ch.length === 0) return new Float32Array(_getIdentityLut());
+    const pts = [...ch].sort((a, b) => a[0] - b[0]);
+    const x0 = pts[0][0], x1 = pts[pts.length - 1][0];
+    const lut = new Float32Array(256);
+    for (let x = 0; x < 256; x++) {
+      if (x <= x0) {
+        lut[x] = pts[0][1] / 255;
+        continue;
+      }
+      if (x >= x1) {
+        lut[x] = pts[pts.length - 1][1] / 255;
+        continue;
+      }
+      let lo = 0, hi = pts.length - 1;
+      while (hi - lo > 1) {
+        const mid = lo + hi >> 1;
+        if (pts[mid][0] <= x) lo = mid;
+        else hi = mid;
+      }
+      const xLo = pts[lo][0], yLo = pts[lo][1];
+      const xHi = pts[hi][0], yHi = pts[hi][1];
+      const t = xHi === xLo ? 0 : (x - xLo) / (xHi - xLo);
+      lut[x] = (yLo + t * (yHi - yLo)) / 255;
+    }
+    return lut;
+  }
   function isIdentity(ch) {
     if (!ch || ch.length === 0) return true;
     if (ch.length === 2 && ch[0][0] === 0 && ch[0][1] === 0 && ch[1][0] === 255 && ch[1][1] === 255) return true;
@@ -518,6 +552,20 @@
       data[i + 2] = Math.max(0, Math.min(255, Math.round((b / 255 - hazeAmount) * 255)));
     }
   }
+  function applyToneCurveToRgba(data, curve) {
+    const rgb = buildLut(curve?.rgb);
+    const rLut = buildLut(curve?.r);
+    const gLut = buildLut(curve?.g);
+    const bLut = buildLut(curve?.b);
+    for (let i = 0; i < data.length; i += 4) {
+      const r = Math.max(0, Math.min(255, Math.round(rgb[data[i]] * 255)));
+      const g = Math.max(0, Math.min(255, Math.round(rgb[data[i + 1]] * 255)));
+      const b = Math.max(0, Math.min(255, Math.round(rgb[data[i + 2]] * 255)));
+      data[i] = Math.max(0, Math.min(255, Math.round(rLut[r] * 255)));
+      data[i + 1] = Math.max(0, Math.min(255, Math.round(gLut[g] * 255)));
+      data[i + 2] = Math.max(0, Math.min(255, Math.round(bLut[b] * 255)));
+    }
+  }
   function drawLegacy() {
     if (!sourceImage.complete || !sourceImage.naturalWidth) return;
     ctx.save();
@@ -550,9 +598,10 @@
     const hasSliderWork = isIOS && (state.exposure !== 0 || state.contrast !== 0 || state.brightness !== 0 || state.saturation !== 0 || previewTemp !== 0 || previewTint !== 0);
     const hasSharpen = state.sharpen > 0;
     const hasLut = !!(activeLut && state.lut_id && state.lut_intensity > 0);
+    const hasToneCurve = typeof _cvData !== "undefined" && !isFlat(_cvData);
     const hasFilterWork = !isIOS && computeFilters({ temp: previewTemp, tint: previewTint }) !== "";
     const hasDehaze = (state.dehaze || 0) !== 0;
-    const needsPixelPass = hasSliderWork || hasLut || hasDehaze;
+    const needsPixelPass = hasSliderWork || hasLut || hasToneCurve || hasDehaze;
     const needsFullPipeline = hasSharpen || needsPixelPass || hasFilterWork;
     if (!needsFullPipeline) {
       ctx.filter = "none";
@@ -566,6 +615,7 @@
           const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const data = imgData.data;
           if (hasSliderWork) applySlidersToRgba(data, { ...state, temp: previewTemp, tint: previewTint });
+          if (hasToneCurve) applyToneCurveToRgba(imgData.data, _cvData);
           if (hasLut) {
             const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
             applyLutToRgba(activeLut, data, mix);
@@ -584,6 +634,11 @@
       const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : sourceImage;
       ctx.drawImage(drawSource, 0, 0, canvas.width, canvas.height);
       ctx.filter = "none";
+      if (hasToneCurve) {
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        applyToneCurveToRgba(imgData.data, _cvData);
+        ctx.putImageData(imgData, 0, 0);
+      }
       if (hasLut) {
         try {
           const lutPreviewKey = canvas.width + "x" + canvas.height + ":" + state.lut_id;

@@ -85,7 +85,7 @@ assert.match(source,
 //     the per-pixel work. Adding hasDehaze to the gating variable must not
 //     accidentally force every draw to do pixel work.
 assert.match(source,
-  /const needsPixelPass = hasSliderWork \|\| hasLut \|\| hasDehaze;/,
-  'pixel-pass gate must include hasDehaze alongside hasSliderWork and hasLut');
+  /const needsPixelPass = hasSliderWork \|\| hasLut \|\| hasToneCurve \|\| hasDehaze;/,
+  'pixel-pass gate must include tone curves and dehaze alongside sliders and LUTs');
 
 console.log('editor draw() falls back to legacy when WebGL is unavailable');

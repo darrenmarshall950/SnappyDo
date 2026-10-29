@@ -1,4 +1,4 @@
-import { isFlat } from "./curve";
+import { isFlat, buildLut } from "./curve";
       const RAW_DEFAULTS = {
         raw_wb_kelvin: 5500,
         raw_wb_tint: 0,
@@ -685,6 +685,23 @@ import { isFlat } from "./curve";
         }
       }
 
+      // Tone curves were previously implemented only in the WebGL pass.
+      // The shared 2D renderer needs the same RGB + per-channel LUT mapping.
+      function applyToneCurveToRgba(data, curve) {
+        const rgb = buildLut(curve?.rgb);
+        const rLut = buildLut(curve?.r);
+        const gLut = buildLut(curve?.g);
+        const bLut = buildLut(curve?.b);
+        for (let i = 0; i < data.length; i += 4) {
+          const r = Math.max(0, Math.min(255, Math.round(rgb[data[i]] * 255)));
+          const g = Math.max(0, Math.min(255, Math.round(rgb[data[i + 1]] * 255)));
+          const b = Math.max(0, Math.min(255, Math.round(rgb[data[i + 2]] * 255)));
+          data[i] = Math.max(0, Math.min(255, Math.round(rLut[r] * 255)));
+          data[i + 1] = Math.max(0, Math.min(255, Math.round(gLut[g] * 255)));
+          data[i + 2] = Math.max(0, Math.min(255, Math.round(bLut[b] * 255)));
+        }
+      }
+
       // ---- Legacy 2D pipeline (preserved for fallback and iOS) ----
       function drawLegacy() {
         if (!sourceImage.complete || !sourceImage.naturalWidth) return;
@@ -735,9 +752,10 @@ import { isFlat } from "./curve";
         );
         const hasSharpen = state.sharpen > 0;
         const hasLut = !!(activeLut && state.lut_id && state.lut_intensity > 0);
+        const hasToneCurve = typeof _cvData !== 'undefined' && !isFlat(_cvData);
         const hasFilterWork = !isIOS && computeFilters({ temp: previewTemp, tint: previewTint }) !== '';
         const hasDehaze = (state.dehaze || 0) !== 0;
-        const needsPixelPass = hasSliderWork || hasLut || hasDehaze;
+        const needsPixelPass = hasSliderWork || hasLut || hasToneCurve || hasDehaze;
         const needsFullPipeline = hasSharpen || needsPixelPass || hasFilterWork;
 
         if (!needsFullPipeline) {
@@ -755,6 +773,7 @@ import { isFlat } from "./curve";
               const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
               const data = imgData.data;
               if (hasSliderWork) applySlidersToRgba(data, { ...state, temp: previewTemp, tint: previewTint });
+              if (hasToneCurve) applyToneCurveToRgba(imgData.data, _cvData);
               if (hasLut) {
                 const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
                 applyLutToRgba(activeLut, data, mix);
@@ -774,6 +793,11 @@ import { isFlat } from "./curve";
           const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : sourceImage;
           ctx.drawImage(drawSource, 0, 0, canvas.width, canvas.height);
           ctx.filter = 'none';
+          if (hasToneCurve) {
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            applyToneCurveToRgba(imgData.data, _cvData);
+            ctx.putImageData(imgData, 0, 0);
+          }
           if (hasLut) {
             try {
               const lutPreviewKey = canvas.width + 'x' + canvas.height + ':' + state.lut_id;
