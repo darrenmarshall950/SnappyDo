@@ -2797,6 +2797,7 @@
     const idx = _cvData[_cvCh].findIndex(([px, py]) => px === x && py === y);
     _cvSync();
     _cvRefresh();
+    scheduleDraw();
     return idx;
   }
   function _cvRmPt(idx) {
@@ -2804,6 +2805,7 @@
     _cvData[_cvCh].splice(idx, 1);
     _cvSync();
     _cvRefresh();
+    scheduleDraw();
   }
   function _cvReset() {
     for (const ch of ["rgb", "r", "g", "b"]) _cvData[ch] = [[0, 0], [255, 255]];
@@ -2812,6 +2814,8 @@
     document.querySelector('.ch-tab[data-cvch="rgb"]')?.classList.add("active");
     _cvSync();
     _cvRefresh();
+    scheduleDraw();
+    scheduleAuthoritativePreview();
   }
   window._cvReset = _cvReset;
   window._cvSync = _cvSync;

@@ -3193,6 +3193,7 @@ webglPipeline.render();
     _cvData[_cvCh].sort((a,b) => a[0]-b[0]);
     const idx = _cvData[_cvCh].findIndex(([px, py]) => px === x && py === y);
     _cvSync(); _cvRefresh();
+    scheduleDraw();
     return idx;
   }
 
@@ -3200,6 +3201,7 @@ webglPipeline.render();
     if (_cvData[_cvCh].length <= 2) return;
     _cvData[_cvCh].splice(idx, 1);
     _cvSync(); _cvRefresh();
+    scheduleDraw();
   }
 
   function _cvReset() {
@@ -3208,6 +3210,10 @@ webglPipeline.render();
     document.querySelectorAll('.ch-tab').forEach(t => t.classList.remove('active'));
     document.querySelector('.ch-tab[data-cvch="rgb"]')?.classList.add('active');
     _cvSync(); _cvRefresh();
+    // The canvas still holds the previously graded pixels; repaint it so a
+    // cleared curve actually clears the image.
+    scheduleDraw();
+    scheduleAuthoritativePreview();
   }
   (window as any)._cvReset = _cvReset;
   (window as any)._cvSync = _cvSync;
