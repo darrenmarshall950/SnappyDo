@@ -56,11 +56,11 @@ import { isFlat } from "./curve";
       let webglPipeline = null;
       let useWebGL = false;
 
-      // Probe WebGL2 first.
-      const _gl2 = isIOS ? null : canvas.getContext('webgl2', {
-        alpha: false, antialias: false, depth: false, stencil: false,
-        preserveDrawingBuffer: true, premultipliedAlpha: false,
-      });
+      // The multi-pass WebGL effects path has diverged across desktop drivers
+      // (LUT/dehaze can become no-ops) while the shared 2D pixel pipeline is
+      // proven on both phone and desktop. Keep one reliable preview renderer
+      // until WebGL has end-to-end visual regression coverage.
+      const _gl2 = null;
 
       if (_gl2) {
         // WebGL2 is available. Pipeline will be lazily loaded on first draw.

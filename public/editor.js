@@ -35,14 +35,7 @@
   var ctx = null;
   var webglPipeline = null;
   var useWebGL = false;
-  var _gl2 = isIOS ? null : canvas.getContext("webgl2", {
-    alpha: false,
-    antialias: false,
-    depth: false,
-    stencil: false,
-    preserveDrawingBuffer: true,
-    premultipliedAlpha: false
-  });
+  var _gl2 = null;
   if (_gl2) {
     useWebGL = true;
   } else {
