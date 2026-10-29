@@ -119,6 +119,11 @@ import { isFlat } from "./curve";
       // Lookup from LUT id → parsed { size, data: Uint8Array }
       const lutCache = new Map();
       let activeLut = null;  // { size, data } once loaded; null = no LUT pass
+      // Desktop LUTs are worker-rendered. Retain the last graded frame while
+      // a newer worker frame is computed so slider input never flashes raw.
+      let _lastLutPreview = null;
+      let _lastLutPreviewKey = '';
+      let _lutPreviewGeneration = 0;
       const sourceImage = new Image();
       sourceImage.crossOrigin = 'anonymous';
       // Apply CSS preview approximation for RAW sliders that have no
@@ -771,17 +776,28 @@ import { isFlat } from "./curve";
           ctx.filter = 'none';
           if (hasLut) {
             try {
+              const lutPreviewKey = canvas.width + 'x' + canvas.height + ':' + state.lut_id;
+              // Do not expose the ungraded intermediate frame while the worker
+              // is processing the next slider value; keep the previous LUT look
+              // visible until the current worker result is ready.
+              if (_lastLutPreview && _lastLutPreviewKey === lutPreviewKey) {
+                ctx.putImageData(_lastLutPreview, 0, 0);
+              }
               const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
               const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
-              // Offload to worker. Main thread stays responsive while the
-              // worker processes pixels. Race-safe: stale tokens are
-              // discarded by the worker.
+              const generation = ++_lutPreviewGeneration;
               applyLutToRgbaAsync(imgData, mix).then((result) => {
-                if (result) ctx.putImageData(result, 0, 0);
+                if (!result || generation !== _lutPreviewGeneration) return;
+                _lastLutPreview = result;
+                _lastLutPreviewKey = lutPreviewKey;
+                ctx.putImageData(result, 0, 0);
               });
             } catch (e) {
               console.warn('LUT pass failed:', e);
             }
+          } else {
+            _lastLutPreview = null;
+            _lastLutPreviewKey = '';
           }
           if (hasDehaze) {
             try {

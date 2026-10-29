@@ -86,6 +86,9 @@
   var state = { ...initialParams };
   var lutCache = /* @__PURE__ */ new Map();
   var activeLut = null;
+  var _lastLutPreview = null;
+  var _lastLutPreviewKey = "";
+  var _lutPreviewGeneration = 0;
   var sourceImage = new Image();
   sourceImage.crossOrigin = "anonymous";
   if (document.readyState === "loading") {
@@ -583,14 +586,25 @@
       ctx.filter = "none";
       if (hasLut) {
         try {
+          const lutPreviewKey = canvas.width + "x" + canvas.height + ":" + state.lut_id;
+          if (_lastLutPreview && _lastLutPreviewKey === lutPreviewKey) {
+            ctx.putImageData(_lastLutPreview, 0, 0);
+          }
           const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
+          const generation = ++_lutPreviewGeneration;
           applyLutToRgbaAsync(imgData, mix).then((result) => {
-            if (result) ctx.putImageData(result, 0, 0);
+            if (!result || generation !== _lutPreviewGeneration) return;
+            _lastLutPreview = result;
+            _lastLutPreviewKey = lutPreviewKey;
+            ctx.putImageData(result, 0, 0);
           });
         } catch (e) {
           console.warn("LUT pass failed:", e);
         }
+      } else {
+        _lastLutPreview = null;
+        _lastLutPreviewKey = "";
       }
       if (hasDehaze) {
         try {
