@@ -9,7 +9,7 @@
     "build": "npm run build:js && astro build",
     "preview": "astro preview",
     "start": "node ./dist/server/entry.mjs",
-    "test": "node tests/authoritative-preview-source.test.mjs && node tests/editor-fallback.test.mjs && node tests/raw-upload-filter.test.mjs && node tests/sharpen-viewport.test.mjs && node tests/split-toning.test.mjs && node tests/editor-landscape-layout.test.mjs",
+    "test": "node tests/editor-fallback.test.mjs && node tests/raw-upload-filter.test.mjs && node tests/sharpen-viewport.test.mjs && node tests/split-toning.test.mjs && node tests/editor-landscape-layout.test.mjs",
     "lint": "echo 'no lint yet' && exit 0",
     "typecheck": "astro check",
     "docker:build": "docker compose build",

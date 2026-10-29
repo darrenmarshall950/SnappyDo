@@ -1046,7 +1046,6 @@ webglPipeline.render();
       let _webglWarned = false;
       let _webglFailed = false;
       function draw() {
-        hideAuthoritativePreview();
 
         if (!sourceImage.complete || !sourceImage.naturalWidth) return;
         if (useWebGL && !_webglFailed) {
@@ -1402,41 +1401,17 @@ webglPipeline.render();
         if (typeof updateDeletePresetButton === 'function') updateDeletePresetButton();
         let authoritativePreviewTimer = null;
       let authoritativePreviewUrl = null;
-      let authoritativePreviewImage = null;
-      let authoritativePreviewRequest = 0;
-      function hideAuthoritativePreview() {
-        if (authoritativePreviewImage) authoritativePreviewImage.style.display = 'none';
-      }
-      function ensureAuthoritativePreviewImage() {
-        if (authoritativePreviewImage) return authoritativePreviewImage;
-        authoritativePreviewImage = document.createElement('img');
-        authoritativePreviewImage.alt = '';
-        authoritativePreviewImage.setAttribute('aria-hidden', 'true');
-        authoritativePreviewImage.style.cssText = 'display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;z-index:2;';
-        const area = document.querySelector('.canvas-area');
-        if (area) { if (getComputedStyle(area).position === 'static') area.style.position = 'relative'; area.appendChild(authoritativePreviewImage); }
-        return authoritativePreviewImage;
-      }
       async function scheduleAuthoritativePreview() {
         clearTimeout(authoritativePreviewTimer);
-        hideAuthoritativePreview();
-        const request = ++authoritativePreviewRequest;
         authoritativePreviewTimer = setTimeout(async () => {
           try {
             const r = await fetch('/api/images/' + imageId + '/preview-edit', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({params: {...state, curve: _cvData}}) });
-            if (!r.ok || request !== authoritativePreviewRequest) return;
+            if (!r.ok) return;
             const blob = await r.blob();
-            if (!blob.size || request !== authoritativePreviewRequest) return;
+            if (!blob.size) return;
             const url = URL.createObjectURL(blob);
             const probe = new Image();
-            probe.onload = () => {
-              if (!probe.naturalWidth || !probe.naturalHeight || request !== authoritativePreviewRequest) { URL.revokeObjectURL(url); return; }
-              const old = authoritativePreviewUrl; authoritativePreviewUrl = url;
-              const image = ensureAuthoritativePreviewImage();
-              image.src = url;
-              image.style.display = state.crop ? 'none' : 'block';
-              if (old) URL.revokeObjectURL(old);
-            };
+            probe.onload = () => { if (probe.naturalWidth && probe.naturalHeight) { const old=authoritativePreviewUrl; authoritativePreviewUrl=url; sourceImage.src=url; if(old) URL.revokeObjectURL(old); } else URL.revokeObjectURL(url); };
             probe.onerror = () => URL.revokeObjectURL(url);
             probe.src = url;
           } catch (_) {}
