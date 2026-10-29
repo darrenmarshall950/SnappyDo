@@ -445,6 +445,9 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
 
 // ── Tone Curve ──────────────────────────────────────────────────────────────
 
+import { applyToneCurveToRgba } from './curve';
+import type { CurveData } from './curve';
+
 export type CurveChannel = Array<[number, number]>;  // [[x, y], ...] with x,y in 0..255
 export interface CurveState {
   rgb: CurveChannel;
@@ -533,22 +536,13 @@ export function applyToneCurveToRgb(
 ): [number, number, number] {
   if (isToneCurveFlat(curve)) return [r, g, b];
 
-  let ro: number, go: number, bo: number;
-  if (!_isIdentityChannel(curve.rgb)) {
-    // Master "RGB" curve applies to all channels uniformly
-    ro = lutRgb[r];
-    go = lutRgb[g];
-    bo = lutRgb[b];
-  } else {
-    ro = lutR[r];
-    go = lutG[g];
-    bo = lutB[b];
-  }
-  return [
-    Math.max(0, Math.min(255, Math.round(ro * 255))),
-    Math.max(0, Math.min(255, Math.round(go * 255))),
-    Math.max(0, Math.min(255, Math.round(bo * 255))),
-  ];
+  // Single source of truth for the curve semantics, shared with the browser
+  // preview (src/lib/curve.ts -> applyToneCurveToRgba). The master "RGB"
+  // curve applies to all channels when it is non-identity; otherwise each
+  // channel uses its own curve. The curve is applied EXACTLY ONCE.
+  const px = new Uint8ClampedArray([r, g, b, 255]);
+  applyToneCurveToRgba(px, curve as unknown as CurveData);
+  return [px[0], px[1], px[2]];
 }
 
 // ─── Dehaze ───────────────────────────────────────────────────────────────

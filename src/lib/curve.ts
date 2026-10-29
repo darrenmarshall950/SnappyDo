@@ -88,3 +88,25 @@ export function toDisplayable(curve: CurveData): string {
   if (!isIdentity(curve?.b)) parts.push('B');
   return parts.join('+') + ' curve';
 }
+
+// Shared RGBA tone-curve application used by BOTH the browser preview and the
+// server export, so preview and saved output cannot drift apart.
+//
+// Semantics match the server renderer (applyToneCurveToRgb in lib/effects.ts):
+//   - if the master "rgb" curve is non-identity it applies to all channels
+//   - otherwise each channel uses its own per-channel curve
+// The curve is applied EXACTLY ONCE; mirroring rgb into r/g/b in the editor
+// must not cause a second grading pass.
+export function applyToneCurveToRgba(data: Uint8ClampedArray, curve: CurveData | null | undefined): void {
+  if (!curve) return;
+  const rgbIsIdentity = isIdentity(curve.rgb);
+  const rgbLut = rgbIsIdentity ? null : buildLut(curve.rgb);
+  const rLut = rgbIsIdentity ? buildLut(curve.r) : rgbLut!;
+  const gLut = rgbIsIdentity ? buildLut(curve.g) : rgbLut!;
+  const bLut = rgbIsIdentity ? buildLut(curve.b) : rgbLut!;
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = Math.max(0, Math.min(255, Math.round(rLut[data[i]] * 255)));
+    data[i + 1] = Math.max(0, Math.min(255, Math.round(gLut[data[i + 1]] * 255)));
+    data[i + 2] = Math.max(0, Math.min(255, Math.round(bLut[data[i + 2]] * 255)));
+  }
+}

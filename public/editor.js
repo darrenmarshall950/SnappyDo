@@ -43,6 +43,19 @@
   function isFlat(curve) {
     return isIdentity(curve?.rgb) && isIdentity(curve?.r) && isIdentity(curve?.g) && isIdentity(curve?.b);
   }
+  function applyToneCurveToRgba(data, curve) {
+    if (!curve) return;
+    const rgbIsIdentity = isIdentity(curve.rgb);
+    const rgbLut = rgbIsIdentity ? null : buildLut(curve.rgb);
+    const rLut = rgbIsIdentity ? buildLut(curve.r) : rgbLut;
+    const gLut = rgbIsIdentity ? buildLut(curve.g) : rgbLut;
+    const bLut = rgbIsIdentity ? buildLut(curve.b) : rgbLut;
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = Math.max(0, Math.min(255, Math.round(rLut[data[i]] * 255)));
+      data[i + 1] = Math.max(0, Math.min(255, Math.round(gLut[data[i + 1]] * 255)));
+      data[i + 2] = Math.max(0, Math.min(255, Math.round(bLut[data[i + 2]] * 255)));
+    }
+  }
 
   // src/lib/editor.ts
   var RAW_DEFAULTS = {
@@ -125,6 +138,36 @@
   var _lutPreviewGeneration = 0;
   var sourceImage = new Image();
   sourceImage.crossOrigin = "anonymous";
+  var authoritativePreviewTimer = null;
+  var authoritativePreviewUrl = null;
+  var authoritativePreviewRequest = 0;
+  function scheduleAuthoritativePreview() {
+    clearTimeout(authoritativePreviewTimer);
+    const request = ++authoritativePreviewRequest;
+    authoritativePreviewTimer = setTimeout(async () => {
+      try {
+        const r = await fetch("/api/images/" + imageId + "/preview-edit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ params: { ...state, curve: _cvData } }) });
+        if (!r.ok || request !== authoritativePreviewRequest) return;
+        const blob = await r.blob();
+        if (!blob.size || request !== authoritativePreviewRequest) return;
+        const url = URL.createObjectURL(blob);
+        const probe = new Image();
+        probe.onload = () => {
+          if (!probe.naturalWidth || !probe.naturalHeight || request !== authoritativePreviewRequest) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          const old = authoritativePreviewUrl;
+          authoritativePreviewUrl = url;
+          sourceImage.src = url;
+          if (old) URL.revokeObjectURL(old);
+        };
+        probe.onerror = () => URL.revokeObjectURL(url);
+        probe.src = url;
+      } catch (_) {
+      }
+    }, 250);
+  }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       if (typeof applyRawPreviewFx === "function") applyRawPreviewFx();
@@ -568,20 +611,6 @@
       data[i] = Math.max(0, Math.min(255, Math.round((r / 255 - hazeAmount) * 255)));
       data[i + 1] = Math.max(0, Math.min(255, Math.round((g / 255 - hazeAmount) * 255)));
       data[i + 2] = Math.max(0, Math.min(255, Math.round((b / 255 - hazeAmount) * 255)));
-    }
-  }
-  function applyToneCurveToRgba(data, curve) {
-    const rgb = buildLut(curve?.rgb);
-    const rLut = buildLut(curve?.r);
-    const gLut = buildLut(curve?.g);
-    const bLut = buildLut(curve?.b);
-    for (let i = 0; i < data.length; i += 4) {
-      const r = Math.max(0, Math.min(255, Math.round(rgb[data[i]] * 255)));
-      const g = Math.max(0, Math.min(255, Math.round(rgb[data[i + 1]] * 255)));
-      const b = Math.max(0, Math.min(255, Math.round(rgb[data[i + 2]] * 255)));
-      data[i] = Math.max(0, Math.min(255, Math.round(rLut[r] * 255)));
-      data[i + 1] = Math.max(0, Math.min(255, Math.round(gLut[g] * 255)));
-      data[i + 2] = Math.max(0, Math.min(255, Math.round(bLut[b] * 255)));
     }
   }
   function drawLegacy() {
@@ -1199,32 +1228,6 @@
     const lutSelEl = document.getElementById("lut-select");
     if (lutSelEl) lutSelEl.value = "";
     if (typeof updateDeletePresetButton === "function") updateDeletePresetButton();
-    let authoritativePreviewTimer = null;
-    let authoritativePreviewUrl = null;
-    async function scheduleAuthoritativePreview2() {
-      clearTimeout(authoritativePreviewTimer);
-      authoritativePreviewTimer = setTimeout(async () => {
-        try {
-          const r = await fetch("/api/images/" + imageId + "/preview-edit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ params: { ...state, curve: _cvData } }) });
-          if (!r.ok) return;
-          const blob = await r.blob();
-          if (!blob.size) return;
-          const url = URL.createObjectURL(blob);
-          const probe = new Image();
-          probe.onload = () => {
-            if (probe.naturalWidth && probe.naturalHeight) {
-              const old = authoritativePreviewUrl;
-              authoritativePreviewUrl = url;
-              sourceImage.src = url;
-              if (old) URL.revokeObjectURL(old);
-            } else URL.revokeObjectURL(url);
-          };
-          probe.onerror = () => URL.revokeObjectURL(url);
-          probe.src = url;
-        } catch (_) {
-        }
-      }, 250);
-    }
     document.querySelectorAll(".slider").forEach((wrap) => {
       const input = wrap.querySelector("input");
       const valEl = wrap.querySelector(".val");
@@ -2624,6 +2627,7 @@
     indicatorEl.classList.toggle("visible", v);
     btnCompare.classList.toggle("active", v);
     btnCompare.setAttribute("aria-pressed", v ? "true" : "false");
+    if (!comparing) _sharpenCacheKey = -1;
     draw();
   }
   btnCompare.addEventListener("mousedown", () => setComparing(true));
@@ -2750,6 +2754,12 @@
       _cvData.g = _cvData.rgb.slice();
       _cvData.b = _cvData.rgb.slice();
     }
+    state.curve = {
+      rgb: _cvData.rgb.map((p) => [p[0], p[1]]),
+      r: _cvData.r.map((p) => [p[0], p[1]]),
+      g: _cvData.g.map((p) => [p[0], p[1]]),
+      b: _cvData.b.map((p) => [p[0], p[1]])
+    };
     if (pipe?.ready) {
       pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
       pipe.render();
@@ -2819,11 +2829,19 @@
     const svg = document.getElementById("cv-svg");
     if (!svg) return;
     const r = () => svg.getBoundingClientRect();
-    svg.addEventListener("mousedown", (e) => {
-      e.preventDefault();
+    const curvePointFromEvent = (clientX, clientY) => {
       const rect = r();
-      const sx = (e.clientX - rect.left) * 220 / rect.width;
-      const sy = (e.clientY - rect.top) * 220 / rect.height;
+      const sx = (clientX - rect.left) * 220 / rect.width;
+      const sy = (clientY - rect.top) * 220 / rect.height;
+      return {
+        x: Math.max(0, Math.min(255, Math.round((sx - 10) * 255 / 200))),
+        y: Math.max(0, Math.min(255, Math.round((sy - 10) * 255 / 200)))
+      };
+    };
+    const beginCurveDrag = (clientX, clientY) => {
+      const rect = r();
+      const sx = (clientX - rect.left) * 220 / rect.width;
+      const sy = (clientY - rect.top) * 220 / rect.height;
       let hit = -1;
       for (let i = 0; i < _cvData[_cvCh].length; i++) {
         const [x, y] = _cvData[_cvCh][i];
@@ -2837,26 +2855,50 @@
         const newIdx = _cvAddPt(sx, sy);
         if (newIdx >= 0) _cvDrag = { idx: newIdx };
       }
-    });
-    window.addEventListener("mousemove", (e) => {
+    };
+    const moveCurveDrag = (clientX, clientY) => {
       if (!_cvDrag) return;
-      const rect = r();
-      const sx = (e.clientX - rect.left) * 220 / rect.width;
-      const sy = (e.clientY - rect.top) * 220 / rect.height;
-      const x = Math.max(0, Math.min(255, Math.round((sx - 10) * 255 / 200)));
-      const y = Math.max(0, Math.min(255, Math.round((sy - 10) * 255 / 200)));
+      const { x, y } = curvePointFromEvent(clientX, clientY);
       _cvData[_cvCh][_cvDrag.idx] = [x, y];
       _cvData[_cvCh].sort((a, b) => a[0] - b[0]);
       _cvSync();
       _cvRefresh();
       scheduleDraw();
-    });
-    window.addEventListener("mouseup", () => {
+    };
+    const endCurveDrag = () => {
       if (!_cvDrag) return;
       _cvDrag = null;
       _cvSync();
       scheduleAuthoritativePreview();
+    };
+    svg.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      beginCurveDrag(e.clientX, e.clientY);
     });
+    window.addEventListener("mousemove", (e) => {
+      moveCurveDrag(e.clientX, e.clientY);
+    });
+    window.addEventListener("mouseup", () => {
+      endCurveDrag();
+    });
+    svg.addEventListener("touchstart", (e) => {
+      const t = e.changedTouches[0];
+      if (!t) return;
+      e.preventDefault();
+      beginCurveDrag(t.clientX, t.clientY);
+    }, { passive: false });
+    svg.addEventListener("touchmove", (e) => {
+      const t = e.changedTouches[0];
+      if (!t) return;
+      e.preventDefault();
+      moveCurveDrag(t.clientX, t.clientY);
+    }, { passive: false });
+    const endTouch = (e) => {
+      e.preventDefault();
+      endCurveDrag();
+    };
+    svg.addEventListener("touchend", endTouch, { passive: false });
+    svg.addEventListener("touchcancel", endTouch, { passive: false });
     svg.addEventListener("dblclick", (e) => {
       const rect = r();
       const sx = (e.clientX - rect.left) * 220 / rect.width;

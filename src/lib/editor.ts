@@ -1,4 +1,4 @@
-import { isFlat, buildLut } from "./curve";
+import { isFlat, applyToneCurveToRgba } from "./curve";
       const RAW_DEFAULTS = {
         raw_wb_kelvin: 5500,
         raw_wb_tint: 0,
@@ -126,6 +126,39 @@ import { isFlat, buildLut } from "./curve";
       let _lutPreviewGeneration = 0;
       const sourceImage = new Image();
       sourceImage.crossOrigin = 'anonymous';
+      // Authoritative (server-rendered) preview scheduling. These live at
+      // editor scope: previously they were nested inside resetAllStateAndUi(),
+      // so every call site threw "scheduleAuthoritativePreview is not defined"
+      // and the server-rendered preview never replaced the canvas image.
+      let authoritativePreviewTimer: any = null;
+      let authoritativePreviewUrl: string | null = null;
+      let authoritativePreviewRequest = 0;
+      function scheduleAuthoritativePreview() {
+        clearTimeout(authoritativePreviewTimer);
+        const request = ++authoritativePreviewRequest;
+        authoritativePreviewTimer = setTimeout(async () => {
+          try {
+            const r = await fetch('/api/images/' + imageId + '/preview-edit', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({params: {...state, curve: _cvData}}) });
+            if (!r.ok || request !== authoritativePreviewRequest) return;
+            const blob = await r.blob();
+            if (!blob.size || request !== authoritativePreviewRequest) return;
+            const url = URL.createObjectURL(blob);
+            const probe = new Image();
+            probe.onload = () => {
+              if (!probe.naturalWidth || !probe.naturalHeight || request !== authoritativePreviewRequest) {
+                URL.revokeObjectURL(url);
+                return;
+              }
+              const old = authoritativePreviewUrl;
+              authoritativePreviewUrl = url;
+              sourceImage.src = url;
+              if (old) URL.revokeObjectURL(old);
+            };
+            probe.onerror = () => URL.revokeObjectURL(url);
+            probe.src = url;
+          } catch (_) {}
+        }, 250);
+      }
       // Apply CSS preview approximation for RAW sliders that have no
       // direct JPEG equivalent (denoise blur, lens brightness lift).
       // Helper is defined later in the script — wrap in DOMContentLoaded.
@@ -700,23 +733,6 @@ import { isFlat, buildLut } from "./curve";
           data[i + 1] = Math.max(0, Math.min(255, Math.round((g / 255 - hazeAmount) * 255)));
           data[i + 2] = Math.max(0, Math.min(255, Math.round((b / 255 - hazeAmount) * 255)));
           // alpha unchanged
-        }
-      }
-
-      // Tone curves were previously implemented only in the WebGL pass.
-      // The shared 2D renderer needs the same RGB + per-channel LUT mapping.
-      function applyToneCurveToRgba(data, curve) {
-        const rgb = buildLut(curve?.rgb);
-        const rLut = buildLut(curve?.r);
-        const gLut = buildLut(curve?.g);
-        const bLut = buildLut(curve?.b);
-        for (let i = 0; i < data.length; i += 4) {
-          const r = Math.max(0, Math.min(255, Math.round(rgb[data[i]] * 255)));
-          const g = Math.max(0, Math.min(255, Math.round(rgb[data[i + 1]] * 255)));
-          const b = Math.max(0, Math.min(255, Math.round(rgb[data[i + 2]] * 255)));
-          data[i] = Math.max(0, Math.min(255, Math.round(rLut[r] * 255)));
-          data[i + 1] = Math.max(0, Math.min(255, Math.round(gLut[g] * 255)));
-          data[i + 2] = Math.max(0, Math.min(255, Math.round(bLut[b] * 255)));
         }
       }
 
@@ -1464,25 +1480,6 @@ webglPipeline.render();
         const lutSelEl = document.getElementById('lut-select') as HTMLSelectElement | null;
         if (lutSelEl) lutSelEl.value = '';
         if (typeof updateDeletePresetButton === 'function') updateDeletePresetButton();
-        let authoritativePreviewTimer = null;
-      let authoritativePreviewUrl = null;
-      async function scheduleAuthoritativePreview() {
-        clearTimeout(authoritativePreviewTimer);
-        authoritativePreviewTimer = setTimeout(async () => {
-          try {
-            const r = await fetch('/api/images/' + imageId + '/preview-edit', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({params: {...state, curve: _cvData}}) });
-            if (!r.ok) return;
-            const blob = await r.blob();
-            if (!blob.size) return;
-            const url = URL.createObjectURL(blob);
-            const probe = new Image();
-            probe.onload = () => { if (probe.naturalWidth && probe.naturalHeight) { const old=authoritativePreviewUrl; authoritativePreviewUrl=url; sourceImage.src=url; if(old) URL.revokeObjectURL(old); } else URL.revokeObjectURL(url); };
-            probe.onerror = () => URL.revokeObjectURL(url);
-            probe.src = url;
-          } catch (_) {}
-        }, 250);
-      }
-
       document.querySelectorAll('.slider').forEach((wrap) => {
           const input = wrap.querySelector('input');
           const valEl = wrap.querySelector('.val');
@@ -3003,6 +3000,10 @@ webglPipeline.render();
         comparing = v;
         indicatorEl.classList.toggle('visible', v);
         btnCompare.classList.toggle('active', v); btnCompare.setAttribute('aria-pressed', v ? 'true' : 'false');
+        // While comparing we deliberately show the untouched source. When the
+        // hold ends we must draw the EDITED result again, and the canvas must
+        // be rebuilt from the original rather than from the comparison frame.
+        if (!comparing) _sharpenCacheKey = -1;
         draw();
       }
       // mouse / touch — press to compare, release to return
@@ -3149,6 +3150,15 @@ webglPipeline.render();
       _cvData.g = _cvData.rgb.slice();
       _cvData.b = _cvData.rgb.slice();
     }
+    // Keep the shared curve state in sync with the editor state so the
+    // server-side render (and therefore the saved file) sees the same curve
+    // the preview is showing.
+    (state as any).curve = {
+      rgb: _cvData.rgb.map((p: [number, number]) => [p[0], p[1]]),
+      r: _cvData.r.map((p: [number, number]) => [p[0], p[1]]),
+      g: _cvData.g.map((p: [number, number]) => [p[0], p[1]]),
+      b: _cvData.b.map((p: [number, number]) => [p[0], p[1]]),
+    };
     if (pipe?.ready) {
       pipe.setCurves({ rgb: _cvData.rgb, r: _cvData.r, g: _cvData.g, b: _cvData.b });
       pipe.render();
@@ -3220,11 +3230,22 @@ webglPipeline.render();
     // Restore the established mouse gesture path. iOS delivers compatible mouse
     // events here, while this avoids the pointer-capture regression introduced
     // during the live-preview change.
-    svg.addEventListener('mousedown', (e: MouseEvent) => {
-      e.preventDefault();
+    // Pointer/mouse/touch are unified into one gesture state so a finger on an
+    // iPhone and a mouse on a laptop drive exactly the same code path.
+    const curvePointFromEvent = (clientX: number, clientY: number) => {
       const rect = r();
-      const sx = (e.clientX - rect.left) * 220 / rect.width;
-      const sy = (e.clientY - rect.top) * 220 / rect.height;
+      const sx = (clientX - rect.left) * 220 / rect.width;
+      const sy = (clientY - rect.top) * 220 / rect.height;
+      return {
+        x: Math.max(0, Math.min(255, Math.round((sx - 10) * 255 / 200))),
+        y: Math.max(0, Math.min(255, Math.round((sy - 10) * 255 / 200))),
+      };
+    };
+
+    const beginCurveDrag = (clientX: number, clientY: number) => {
+      const rect = r();
+      const sx = (clientX - rect.left) * 220 / rect.width;
+      const sy = (clientY - rect.top) * 220 / rect.height;
       let hit = -1;
       for (let i = 0; i < _cvData[_cvCh].length; i++) {
         const [x,y] = _cvData[_cvCh][i];
@@ -3232,28 +3253,60 @@ webglPipeline.render();
       }
       if (hit >= 0) _cvDrag = { idx: hit };
       else { const newIdx = _cvAddPt(sx, sy); if (newIdx >= 0) _cvDrag = { idx: newIdx }; }
-    });
+    };
 
-    window.addEventListener('mousemove', (e: MouseEvent) => {
+    const moveCurveDrag = (clientX: number, clientY: number) => {
       if (!_cvDrag) return;
-      const rect = r();
-      const sx = (e.clientX - rect.left) * 220 / rect.width;
-      const sy = (e.clientY - rect.top) * 220 / rect.height;
-      const x = Math.max(0, Math.min(255, Math.round((sx-10)*255/200)));
-      const y = Math.max(0, Math.min(255, Math.round((sy-10)*255/200)));
+      const { x, y } = curvePointFromEvent(clientX, clientY);
       _cvData[_cvCh][_cvDrag.idx] = [x, y];
       _cvData[_cvCh].sort((a,b) => a[0]-b[0]);
       _cvSync();
       _cvRefresh();
       scheduleDraw();
-    });
+    };
 
-    window.addEventListener('mouseup', () => {
+    const endCurveDrag = () => {
       if (!_cvDrag) return;
       _cvDrag = null;
       _cvSync();
       scheduleAuthoritativePreview();
+    };
+
+    svg.addEventListener('mousedown', (e: MouseEvent) => {
+      e.preventDefault();
+      beginCurveDrag(e.clientX, e.clientY);
     });
+
+    window.addEventListener('mousemove', (e: MouseEvent) => {
+      moveCurveDrag(e.clientX, e.clientY);
+    });
+
+    window.addEventListener('mouseup', () => {
+      endCurveDrag();
+    });
+
+    // Touch: iOS does not deliver mousemove during a finger drag, so the
+    // curve appeared frozen on the phone.
+    svg.addEventListener('touchstart', (e: TouchEvent) => {
+      const t = e.changedTouches[0];
+      if (!t) return;
+      e.preventDefault();
+      beginCurveDrag(t.clientX, t.clientY);
+    }, { passive: false });
+
+    svg.addEventListener('touchmove', (e: TouchEvent) => {
+      const t = e.changedTouches[0];
+      if (!t) return;
+      e.preventDefault();
+      moveCurveDrag(t.clientX, t.clientY);
+    }, { passive: false });
+
+    const endTouch = (e: TouchEvent) => {
+      e.preventDefault();
+      endCurveDrag();
+    };
+    svg.addEventListener('touchend', endTouch, { passive: false });
+    svg.addEventListener('touchcancel', endTouch, { passive: false });
 
     svg.addEventListener('dblclick', (e: MouseEvent) => {
       const rect = r();
