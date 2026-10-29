@@ -777,13 +777,16 @@ import { isFlat } from "./curve";
           if (hasLut) {
             try {
               const lutPreviewKey = canvas.width + 'x' + canvas.height + ':' + state.lut_id;
+              // Capture the current, ungraded adjustment frame first. The
+              // retained image below is display-only; it must never become the
+              // worker input or the LUT would be applied cumulatively on drag.
+              const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
               // Do not expose the ungraded intermediate frame while the worker
               // is processing the next slider value; keep the previous LUT look
               // visible until the current worker result is ready.
               if (_lastLutPreview && _lastLutPreviewKey === lutPreviewKey) {
                 ctx.putImageData(_lastLutPreview, 0, 0);
               }
-              const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
               const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
               const generation = ++_lutPreviewGeneration;
               applyLutToRgbaAsync(imgData, mix).then((result) => {

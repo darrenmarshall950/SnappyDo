@@ -587,10 +587,10 @@
       if (hasLut) {
         try {
           const lutPreviewKey = canvas.width + "x" + canvas.height + ":" + state.lut_id;
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           if (_lastLutPreview && _lastLutPreviewKey === lutPreviewKey) {
             ctx.putImageData(_lastLutPreview, 0, 0);
           }
-          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const mix = Math.max(0, Math.min(1, state.lut_intensity / 100));
           const generation = ++_lutPreviewGeneration;
           applyLutToRgbaAsync(imgData, mix).then((result) => {
