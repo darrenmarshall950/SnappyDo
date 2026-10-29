@@ -141,9 +141,19 @@
   var authoritativePreviewTimer = null;
   var authoritativePreviewUrl = null;
   var authoritativePreviewRequest = 0;
+  var authoritativePreviewImage = new Image();
+  var authoritativePreviewReady = false;
+  var authoritativePreviewKey = "";
+  function renderStateKey() {
+    const clone = { ...state };
+    delete clone.snapshots;
+    return JSON.stringify({ params: clone, curve: _cvData });
+  }
   function scheduleAuthoritativePreview() {
     clearTimeout(authoritativePreviewTimer);
     const request = ++authoritativePreviewRequest;
+    authoritativePreviewReady = false;
+    const key = renderStateKey();
     authoritativePreviewTimer = setTimeout(async () => {
       try {
         const r = await fetch("/api/images/" + imageId + "/preview-edit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ params: { ...state, curve: _cvData } }) });
@@ -159,8 +169,11 @@
           }
           const old = authoritativePreviewUrl;
           authoritativePreviewUrl = url;
-          sourceImage.src = url;
+          authoritativePreviewImage.src = url;
+          authoritativePreviewReady = true;
+          authoritativePreviewKey = key;
           if (old) URL.revokeObjectURL(old);
+          scheduleDraw();
         };
         probe.onerror = () => URL.revokeObjectURL(url);
         probe.src = url;
@@ -617,6 +630,25 @@
     if (!sourceImage.complete || !sourceImage.naturalWidth) return;
     ctx.save();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const authReady = authoritativePreviewReady && authoritativePreviewImage.complete && !!authoritativePreviewImage.naturalWidth && authoritativePreviewKey === renderStateKey() && !state.crop && !state.straighten;
+    if (authReady && !comparing) {
+      ctx.drawImage(authoritativePreviewImage, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
+      if (state.crop) {
+        const c = state.crop;
+        const cx = c.x * canvas.width, cy = c.y * canvas.height;
+        const cw = c.w * canvas.width, ch = c.h * canvas.height;
+        ctx.strokeStyle = "#fafafa";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(cx, cy, cw, ch);
+        const h = 12;
+        ctx.fillStyle = "#fafafa";
+        [[cx, cy], [cx + cw, cy], [cx, cy + ch], [cx + cw, cy + ch]].forEach(([x, y]) => {
+          ctx.fillRect(x - h / 2, y - h / 2, h, h);
+        });
+      }
+      return;
+    }
     let previewTemp = state.temp;
     let previewTint = state.tint;
     if (isRawAtRuntime && state.raw_wb_kelvin != null) {

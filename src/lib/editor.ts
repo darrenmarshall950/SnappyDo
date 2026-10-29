@@ -133,9 +133,34 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
       let authoritativePreviewTimer: any = null;
       let authoritativePreviewUrl: string | null = null;
       let authoritativePreviewRequest = 0;
+      // The server render already contains every edit (curve, LUT, sliders,
+      // dehaze). It must therefore be DISPLAY ONLY: it can never replace the
+      // source image, or the local renderer would grade the already-graded
+      // pixels a second time and Compare would show the graded image instead
+      // of the original.
+      const authoritativePreviewImage = new Image();
+      // The overlay is only trusted while the editor state is unchanged since
+      // it was rendered. Any edit changes the state key, which invalidates the
+      // overlay so the fast local preview takes over immediately.
+      let authoritativePreviewReady = false;
+      let authoritativePreviewKey = '';
+      // A stable signature of everything that affects the rendered image.
+      function renderStateKey(): string {
+        const clone: any = { ...state };
+        delete clone.snapshots; // UI-only list of saved snapshots
+        return JSON.stringify({ params: clone, curve: _cvData });
+      }
       function scheduleAuthoritativePreview() {
         clearTimeout(authoritativePreviewTimer);
         const request = ++authoritativePreviewRequest;
+        // The current overlay was rendered from the previous state, so it no
+        // longer matches what is on screen. Drop it immediately and let the
+        // fast local preview take over until the new server render arrives.
+        authoritativePreviewReady = false;
+        // Capture the key NOW. If the state changes while the server renders,
+        // the returned preview no longer matches what is on screen and must be
+        // discarded instead of replacing a newer result.
+        const key = renderStateKey();
         authoritativePreviewTimer = setTimeout(async () => {
           try {
             const r = await fetch('/api/images/' + imageId + '/preview-edit', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({params: {...state, curve: _cvData}}) });
@@ -151,8 +176,13 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
               }
               const old = authoritativePreviewUrl;
               authoritativePreviewUrl = url;
-              sourceImage.src = url;
+              // Display only: swap the overlay image, never the source.
+              authoritativePreviewImage.src = url;
+              authoritativePreviewReady = true;
+              authoritativePreviewKey = key;
               if (old) URL.revokeObjectURL(old);
+              // Repaint so the overlay becomes visible.
+              scheduleDraw();
             };
             probe.onerror = () => URL.revokeObjectURL(url);
             probe.src = url;
@@ -741,6 +771,38 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
         if (!sourceImage.complete || !sourceImage.naturalWidth) return;
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // The authoritative server render is display-only and already contains
+        // every edit. When it is available we show it verbatim: re-applying the
+        // local edits on top would grade the graded pixels a second time.
+        // The overlay is trusted only when it was rendered from exactly the
+        // state that is on screen now, and only when the geometry matches the
+        // source (no crop, no straighten), otherwise it would be stretched
+        // into the wrong aspect ratio.
+        const authReady =
+          authoritativePreviewReady &&
+          authoritativePreviewImage.complete &&
+          !!authoritativePreviewImage.naturalWidth &&
+          authoritativePreviewKey === renderStateKey() &&
+          !state.crop &&
+          !(state as any).straighten;
+        if (authReady && !comparing) {
+          ctx.drawImage(authoritativePreviewImage, 0, 0, canvas.width, canvas.height);
+          ctx.restore();
+          if (state.crop) {
+            const c = state.crop;
+            const cx = c.x * canvas.width, cy = c.y * canvas.height;
+            const cw = c.w * canvas.width, ch = c.h * canvas.height;
+            ctx.strokeStyle = '#fafafa';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(cx, cy, cw, ch);
+            const h = 12;
+            ctx.fillStyle = '#fafafa';
+            [[cx,cy],[cx+cw,cy],[cx,cy+ch],[cx+cw,cy+ch]].forEach(([x,y]) => {
+              ctx.fillRect(x - h/2, y - h/2, h, h);
+            });
+          }
+          return;
+        }
         // For RAW images, translate raw_wb_kelvin/raw_wb_tint into legacy
         // temp/tint for live preview feedback. Mirrors drawWebGL().
         let previewTemp = state.temp;
