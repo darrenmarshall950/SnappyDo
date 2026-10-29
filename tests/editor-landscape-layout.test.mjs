@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const source = readFileSync(new URL('../src/pages/admin/edit/[id].astro', import.meta.url), 'utf8');
+assert.match(source, /@media\s*\(max-width:\s*768px\)\s*and\s*\(orientation:\s*landscape\)/, 'phone landscape needs its own responsive layout rule');
+assert.match(source, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(16rem,\s*42vw\)/, 'landscape must use image-left and controls-right columns');
+assert.match(source, /grid-template-areas:\s*["']top top["'][\s\S]*?["']canvas panel["']/, 'landscape must place canvas left of the controls');
+const landscapeIndex = source.indexOf('@media (max-width: 768px) and (orientation: landscape)');
+const landscapeCss = source.slice(landscapeIndex, source.indexOf('@media (max-width: 420px)', landscapeIndex));
+assert.match(landscapeCss, /\.panel\s*\{[\s\S]*?overflow-y:\s*auto/, 'landscape controls must scroll independently');
+assert.match(landscapeCss, /\.canvas-area\s*\{[\s\S]*?min-height:\s*0/, 'landscape canvas must remain within the viewport');
+console.log('phone landscape editor layout contract passed');

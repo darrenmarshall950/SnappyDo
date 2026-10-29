@@ -623,6 +623,33 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
         }
       }
 
+      /* Phone landscape: keep the photograph visible while its controls scroll.
+         This overrides the portrait-phone stack above. */
+      @media (max-width: 768px) and (orientation: landscape) {
+        html, body { height: 100%; overflow: hidden; }
+        .editor {
+          grid-template-columns: minmax(0, 1fr) minmax(16rem, 42vw);
+          grid-template-rows: 48px minmax(0, 1fr);
+          grid-template-areas:
+            "top top"
+            "canvas panel";
+          height: 100dvh;
+        }
+        .top { order: unset; flex-wrap: nowrap; padding: 0 0.75rem; }
+        .top-actions { width: auto; justify-content: flex-end; }
+        .canvas-area { order: unset; min-height: 0; border-bottom: none; overflow: hidden; }
+        canvas#preview { max-height: calc(100dvh - 48px); max-width: 100%; }
+        .panel {
+          order: unset;
+          min-height: 0;
+          max-height: none;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+          border-top: none;
+          border-left: 1px solid var(--border);
+        }
+      }
+
       @media (max-width: 420px) {
         .top-actions .btn-label { display: none; }
       }
