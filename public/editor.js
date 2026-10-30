@@ -152,7 +152,6 @@
   function scheduleAuthoritativePreview() {
     clearTimeout(authoritativePreviewTimer);
     const request = ++authoritativePreviewRequest;
-    authoritativePreviewReady = false;
     const key = renderStateKey();
     authoritativePreviewTimer = setTimeout(async () => {
       try {
@@ -630,7 +629,7 @@
     if (!sourceImage.complete || !sourceImage.naturalWidth) return;
     ctx.save();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const authReady = authoritativePreviewReady && authoritativePreviewImage.complete && !!authoritativePreviewImage.naturalWidth && authoritativePreviewKey === renderStateKey() && !state.crop && !state.straighten;
+    const authReady = authoritativePreviewReady && authoritativePreviewImage.complete && !!authoritativePreviewImage.naturalWidth && !state.crop && !state.straighten;
     if (authReady && !comparing) {
       ctx.drawImage(authoritativePreviewImage, 0, 0, canvas.width, canvas.height);
       ctx.restore();
@@ -1444,7 +1443,7 @@
       const { presets } = await res.json();
       const sel = document.getElementById("preset-select");
       if (!sel) return;
-      sel.innerHTML = '<option value="">Choose preset\u2026</option>';
+      sel.innerHTML = '<option value="">No preset</option>';
       for (const p of presets) {
         const opt = document.createElement("option");
         opt.value = String(p.id);
@@ -1575,7 +1574,12 @@
     presetSelect.addEventListener("change", () => {
       updateDeletePresetButton();
       const id = Number(presetSelect.value);
-      if (!id) return;
+      if (!id) {
+        const hadPreset = !!state.preset_id;
+        state.preset_id = void 0;
+        if (hadPreset) setStatus("Preset removed \u2014 keeping current edits.", false);
+        return;
+      }
       const p = (window.__snappydoPresets || []).find((x) => x.id === id);
       if (!p) return;
       const newLutId = p.params && p.params.lut_id ? Number(p.params.lut_id) : 0;

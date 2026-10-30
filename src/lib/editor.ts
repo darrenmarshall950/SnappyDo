@@ -139,9 +139,11 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
       // pixels a second time and Compare would show the graded image instead
       // of the original.
       const authoritativePreviewImage = new Image();
-      // The overlay is only trusted while the editor state is unchanged since
-      // it was rendered. Any edit changes the state key, which invalidates the
-      // overlay so the fast local preview takes over immediately.
+      // Keep the last completed server render visible while its replacement is
+      // being prepared. Falling back to the source image during slider input
+      // makes a previously edited photo flash back to its original look.
+      // Requests are generation-guarded, so only the newest render can replace
+      // this retained display frame.
       let authoritativePreviewReady = false;
       let authoritativePreviewKey = '';
       // A stable signature of everything that affects the rendered image.
@@ -153,10 +155,8 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
       function scheduleAuthoritativePreview() {
         clearTimeout(authoritativePreviewTimer);
         const request = ++authoritativePreviewRequest;
-        // The current overlay was rendered from the previous state, so it no
-        // longer matches what is on screen. Drop it immediately and let the
-        // fast local preview take over until the new server render arrives.
-        authoritativePreviewReady = false;
+        // Retain the last completed edited frame while the replacement is in
+        // flight. This prevents slider input from flashing the original image.
         // Capture the key NOW. If the state changes while the server renders,
         // the returned preview no longer matches what is on screen and must be
         // discarded instead of replacing a newer result.
@@ -773,16 +773,14 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         // The authoritative server render is display-only and already contains
         // every edit. When it is available we show it verbatim: re-applying the
-        // local edits on top would grade the graded pixels a second time.
-        // The overlay is trusted only when it was rendered from exactly the
-        // state that is on screen now, and only when the geometry matches the
-        // source (no crop, no straighten), otherwise it would be stretched
-        // into the wrong aspect ratio.
+        // local edits on top would grade the graded pixels a second time. Keep
+        // the last completed frame visible while a newer slider render is in
+        // flight; only geometry changes bypass it because they would stretch a
+        // frame rendered with the previous crop/straighten settings.
         const authReady =
           authoritativePreviewReady &&
           authoritativePreviewImage.complete &&
           !!authoritativePreviewImage.naturalWidth &&
-          authoritativePreviewKey === renderStateKey() &&
           !state.crop &&
           !(state as any).straighten;
         if (authReady && !comparing) {
@@ -1765,7 +1763,7 @@ webglPipeline.render();
           const sel = document.getElementById('preset-select');
           if (!sel) return;
           // Reset to default option
-          sel.innerHTML = '<option value="">Choose preset…</option>';
+          sel.innerHTML = '<option value="">No preset</option>';
           for (const p of presets) {
             const opt = document.createElement('option');
             opt.value = String(p.id);
@@ -1918,7 +1916,12 @@ webglPipeline.render();
         presetSelect.addEventListener('change', () => {
           updateDeletePresetButton();
           const id = Number(presetSelect.value);
-          if (!id) return;
+          if (!id) {
+            const hadPreset = !!state.preset_id;
+            (state as any).preset_id = undefined;
+            if (hadPreset) setStatus('Preset removed — keeping current edits.', false);
+            return;
+          }
           const p = (window.__snappydoPresets || []).find((x) => x.id === id);
           if (!p) return;
 

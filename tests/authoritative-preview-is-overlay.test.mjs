@@ -34,11 +34,13 @@ assert.match(
   'the authoritative preview must be assigned to the display overlay image'
 );
 
-// The overlay is only trusted while it matches the state it was rendered from.
-assert.match(
-  source,
-  /authoritativePreviewKey\s*===\s*renderStateKey\(\)/,
-  'the overlay must only be displayed while it matches the current state'
+// The last completed overlay stays visible while a replacement is rendering,
+// so a slider cannot flash the original image between server renders.
+const scheduler = source.slice(schedStart, source.indexOf('\n      }\n', schedStart) + '\n      }\n'.length);
+assert.doesNotMatch(
+  scheduler,
+  /authoritativePreviewReady\s*=\s*false/,
+  'scheduling a replacement preview must retain the completed overlay'
 );
 
 // The draw path must show the overlay verbatim rather than re-grading it.
