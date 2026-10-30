@@ -1935,9 +1935,14 @@
       }
       applyVignetteOverlay();
       applyRawPreviewFx();
+      clearTimeout(authoritativePreviewTimer);
+      authoritativePreviewRequest++;
+      authoritativePreviewReady = false;
       scheduleDraw();
-      scheduleAuthoritativePreview();
       if (RAW_KEYS.includes(key)) scheduleRawPreviewFetch("slider:" + key);
+    });
+    input.addEventListener("change", () => {
+      scheduleAuthoritativePreview();
     });
   });
   function resetKeys(keys) {

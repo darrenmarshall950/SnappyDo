@@ -2314,11 +2314,19 @@ webglPipeline.render();
           }
           applyVignetteOverlay();
           applyRawPreviewFx();
+          // Slider input must stay responsive. Hide the previous authoritative
+          // frame and let the local pipeline update immediately; the exact
+          // Sharp render is requested once the user releases the slider.
+          clearTimeout(authoritativePreviewTimer);
+          authoritativePreviewRequest++;
+          authoritativePreviewReady = false;
           scheduleDraw();
-          scheduleAuthoritativePreview();
           // RAW preview-render: re-fetch on slider-release (debounced 300ms).
           // Only fires if the slider is one of the RAW-only keys.
           if (RAW_KEYS.includes(key)) scheduleRawPreviewFetch('slider:' + key);
+        });
+        input.addEventListener('change', () => {
+          scheduleAuthoritativePreview();
         });
       });
 
