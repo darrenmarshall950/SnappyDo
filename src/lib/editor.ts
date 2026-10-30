@@ -2822,7 +2822,9 @@ webglPipeline.render();
       window.addEventListener('mouseup', onUp);
       window.addEventListener('touchend', onUp);
       function onDown(e) {
-
+        // A zoomed drag is reserved for panning. Starting crop state here
+        // causes the crop renderer to race the pan and can black-frame canvas.
+        if (zoomMode !== 'fit') return;
         const p = getPos(e);
         // Hit-test corners of existing cropBox
         if (cropBox) {

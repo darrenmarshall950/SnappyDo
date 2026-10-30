@@ -2448,6 +2448,7 @@
   window.addEventListener("mouseup", onUp);
   window.addEventListener("touchend", onUp);
   function onDown(e) {
+    if (zoomMode !== "fit") return;
     const p = getPos(e);
     if (cropBox) {
       const h = 14;
