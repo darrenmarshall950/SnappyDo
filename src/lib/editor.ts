@@ -461,6 +461,8 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
           canvas.style.height = bh + 'px';
           canvas.style.transform = '';
           canvas.style.position = '';
+          canvas.style.left = '';
+          canvas.style.top = '';
         } else {
           // Zoom mode. KEY PERFORMANCE FIX: backing buffer stays at SOURCE
           // resolution, CSS transform: scale(z) applies the visual zoom.
@@ -490,7 +492,9 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
           panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
           panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
           canvas.style.transformOrigin = '0 0';
-          canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + z + ')';
+          canvas.style.left = panX + 'px';
+          canvas.style.top = panY + 'px';
+          canvas.style.transform = z === 1 ? '' : 'scale(' + z + ')';
         }
         // Hint the canvas blit / CSS scale to use the highest-quality resampler.
         // Skip when ctx is null (WebGL path owns the canvas).
@@ -1610,9 +1614,9 @@ webglPipeline.render();
         e.preventDefault();
       });
       function applyPanTransform() {
-        // Re-apply the current pan as a CSS transform. Cheaper than calling
-        // fitCanvasToArea() on every drag tick (which would reset the
-        // backing buffer and re-render the full pipeline).
+        // Move the zoomed canvas through positioned layout. Translating the
+        // canvas itself through the compositor can transiently black-frame its
+        // backing store during a pointer drag; left/top avoids that path.
         if (zoomMode === 'fit') return;
         const z = parseInt(zoomMode, 10) / 100;
         const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
@@ -1622,7 +1626,9 @@ webglPipeline.render();
         panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
         panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
         canvas.style.transformOrigin = '0 0';
-        canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + z + ')';
+        canvas.style.left = panX + 'px';
+        canvas.style.top = panY + 'px';
+        canvas.style.transform = z === 1 ? '' : 'scale(' + z + ')';
       }
       window.addEventListener('mousemove', (e) => {
         if (!dragging) return;

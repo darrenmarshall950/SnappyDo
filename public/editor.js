@@ -387,6 +387,8 @@
       canvas.style.height = bh + "px";
       canvas.style.transform = "";
       canvas.style.position = "";
+      canvas.style.left = "";
+      canvas.style.top = "";
     } else {
       bw = sourceImage.width;
       bh = sourceImage.height;
@@ -406,7 +408,9 @@
       panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
       panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
       canvas.style.transformOrigin = "0 0";
-      canvas.style.transform = "translate(" + panX + "px," + panY + "px) scale(" + z + ")";
+      canvas.style.left = panX + "px";
+      canvas.style.top = panY + "px";
+      canvas.style.transform = z === 1 ? "" : "scale(" + z + ")";
     }
     if (ctx && ctx.imageSmoothingQuality !== void 0) {
       ctx.imageSmoothingEnabled = true;
@@ -1324,7 +1328,9 @@
     panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
     panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
     canvas.style.transformOrigin = "0 0";
-    canvas.style.transform = "translate(" + panX + "px," + panY + "px) scale(" + z + ")";
+    canvas.style.left = panX + "px";
+    canvas.style.top = panY + "px";
+    canvas.style.transform = z === 1 ? "" : "scale(" + z + ")";
   }
   window.addEventListener("mousemove", (e) => {
     if (!dragging) return;
