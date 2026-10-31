@@ -378,24 +378,16 @@ import { buildRenderRecipe } from "./render-recipe";
       // Sharpen is now handled via getSharpenedSource() below — unsharp-mask
       // in plain Canvas 2D pixel ops, no SVG filter dependency.
 
-      // Maximum canvas backing buffer dimension. We render at NATIVE source
-      // resolution always — never downsample at the canvas blit stage, because
-      // browser drawImage's bilinear downsample loses detail before CSS gets
-      // a chance to do its high-quality GPU downsample for display. The
-      // browser's CSS compositor is much better at the final downsample than
-      // canvas drawImage is at mid-res resampling.
-      //
-      // Trade-off: the per-pixel pipeline (sharpen + LUT) runs at native res.
-      // For a 6000x4000 source that's ~24M pixels; desktop CPU handles the
-      // slider pass at ~200-500ms/frame, sharpen cache first build at ~1-2s,
-      // trilinear LUT apply at ~500-800ms. iOS Safari at native res = ~1-2s
-      // per slider touch — sluggish but functional. The fast path skips all
-      // of this for the 'just looking' case.
-      const MAX_CANVAS_DIM = 16384;  // effectively no cap; covers any sane camera
+      // Zoom must never promote a display preview to a full camera-resolution
+      // pixel pipeline. A 24 MP source makes every LUT/sharpen redraw hundreds
+      // of milliseconds (or seconds on iOS), so zooming becomes unusable.
+      // Keep a finite high-detail preview backing and let CSS preserve the
+      // source-space geometry for 100/200/400% inspection and panning.
+      const MAX_ZOOM_PREVIEW_PIXELS = 3_000_000;
 
-      // Zoom state. 'fit' = current behaviour (backing matches display size,
-      // no jaggies). 100/200/400 = backing = source * (zoom/100), CSS-sized
-      // the same, canvas positioned absolutely with pan offsets for panning.
+      // Zoom state. 'fit' matches the viewport. 100/200/400 retain the source
+      // image's CSS dimensions and pan geometry, while their backing buffer is
+      // capped to keep the stable 2D renderer responsive.
       // Persisted per-image via URL hash (#z=fit or #z=100 etc.).
       let zoomMode = 'fit';
       let panX = 0, panY = 0;
@@ -464,33 +456,32 @@ import { buildRenderRecipe } from "./render-recipe";
           canvas.style.left = '';
           canvas.style.top = '';
         } else {
-          // Zoom mode. KEY PERFORMANCE FIX: backing buffer stays at SOURCE
-          // resolution, CSS transform: scale(z) applies the visual zoom.
-          // Pipeline (drawImage, sharpen, sliders, LUT) processes the same
-          // pixel count at all zoom levels — sliders stay as responsive as
-          // at 100%. CSS upscale is GPU bilinear interpolation: smooth
-          // (upsampling doesn't alias, only downsampling does).
-          bw = sourceImage.width;
-          bh = sourceImage.height;
+          // Zoom mode. Keep a capped high-detail backing buffer. Rendering a
+          // full camera frame into the stable 2D effects pipeline makes zoom
+          // unusable on large files; CSS retains source-space visual size.
+          const sourcePixels = sourceImage.width * sourceImage.height;
+          const previewScale = Math.min(1, Math.sqrt(MAX_ZOOM_PREVIEW_PIXELS / sourcePixels));
+          bw = Math.max(1, Math.round(sourceImage.width * previewScale));
+          bh = Math.max(1, Math.round(sourceImage.height * previewScale));
           canvas.width = bw;
           canvas.height = bh;
-          canvas.style.width = bw + 'px';
-          canvas.style.height = bh + 'px';
+          canvas.style.width = sourceImage.width + 'px';
+          canvas.style.height = sourceImage.height + 'px';
           const z = parseInt(zoomMode, 10) / 100;
           // Pan offsets are in CSS pixels (after the transform). Centring
           // on first zoom-in positions the source at the centre of the
           // viewport at this zoom level.
           if (panX === 0 && panY === 0) {
-            const visW = bw * z;
-            const visH = bh * z;
-            panX = Math.round((aw - visW) / 2);
-            panY = Math.round((ah - visH) / 2);
+            const visualW = sourceImage.width * z;
+            const visualH = sourceImage.height * z;
+            panX = Math.round((aw - visualW) / 2);
+            panY = Math.round((ah - visualH) / 2);
           }
           // Clamp pan so canvas doesn't slide entirely off-screen.
-          const visW = bw * z;
-          const visH = bh * z;
-          panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
-          panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
+          const visualW = sourceImage.width * z;
+          const visualH = sourceImage.height * z;
+          panX = Math.max(Math.min(panX, 32), Math.min(aw - visualW - 32, 0));
+          panY = Math.max(Math.min(panY, 32), Math.min(ah - visualH - 32, 0));
           canvas.style.transformOrigin = '0 0';
           canvas.style.left = panX + 'px';
           canvas.style.top = panY + 'px';
@@ -1621,10 +1612,10 @@ webglPipeline.render();
         const z = parseInt(zoomMode, 10) / 100;
         const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
         const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
-        const visW = canvas.width * z;
-        const visH = canvas.height * z;
-        panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
-        panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
+        const visualW = sourceImage.width * z;
+        const visualH = sourceImage.height * z;
+        panX = Math.max(Math.min(panX, 32), Math.min(aw - visualW - 32, 0));
+        panY = Math.max(Math.min(panY, 32), Math.min(ah - visualH - 32, 0));
         canvas.style.transformOrigin = '0 0';
         canvas.style.left = panX + 'px';
         canvas.style.top = panY + 'px';

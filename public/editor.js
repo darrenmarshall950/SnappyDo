@@ -342,6 +342,7 @@
     vignetteEl.style.opacity = String(o);
   }
   window.applyVignetteOverlay = applyVignetteOverlay;
+  var MAX_ZOOM_PREVIEW_PIXELS = 3e6;
   var zoomMode = "fit";
   var panX = 0;
   var panY = 0;
@@ -405,23 +406,25 @@
       canvas.style.left = "";
       canvas.style.top = "";
     } else {
-      bw = sourceImage.width;
-      bh = sourceImage.height;
+      const sourcePixels = sourceImage.width * sourceImage.height;
+      const previewScale = Math.min(1, Math.sqrt(MAX_ZOOM_PREVIEW_PIXELS / sourcePixels));
+      bw = Math.max(1, Math.round(sourceImage.width * previewScale));
+      bh = Math.max(1, Math.round(sourceImage.height * previewScale));
       canvas.width = bw;
       canvas.height = bh;
-      canvas.style.width = bw + "px";
-      canvas.style.height = bh + "px";
+      canvas.style.width = sourceImage.width + "px";
+      canvas.style.height = sourceImage.height + "px";
       const z = parseInt(zoomMode, 10) / 100;
       if (panX === 0 && panY === 0) {
-        const visW2 = bw * z;
-        const visH2 = bh * z;
-        panX = Math.round((aw - visW2) / 2);
-        panY = Math.round((ah - visH2) / 2);
+        const visualW2 = sourceImage.width * z;
+        const visualH2 = sourceImage.height * z;
+        panX = Math.round((aw - visualW2) / 2);
+        panY = Math.round((ah - visualH2) / 2);
       }
-      const visW = bw * z;
-      const visH = bh * z;
-      panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
-      panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
+      const visualW = sourceImage.width * z;
+      const visualH = sourceImage.height * z;
+      panX = Math.max(Math.min(panX, 32), Math.min(aw - visualW - 32, 0));
+      panY = Math.max(Math.min(panY, 32), Math.min(ah - visualH - 32, 0));
       canvas.style.transformOrigin = "0 0";
       canvas.style.left = panX + "px";
       canvas.style.top = panY + "px";
@@ -1338,10 +1341,10 @@
     const z = parseInt(zoomMode, 10) / 100;
     const aw = areaEl ? areaEl.clientWidth : window.innerWidth;
     const ah = areaEl ? areaEl.clientHeight : window.innerHeight;
-    const visW = canvas.width * z;
-    const visH = canvas.height * z;
-    panX = Math.max(Math.min(panX, 32), Math.min(aw - visW - 32, 0));
-    panY = Math.max(Math.min(panY, 32), Math.min(ah - visH - 32, 0));
+    const visualW = sourceImage.width * z;
+    const visualH = sourceImage.height * z;
+    panX = Math.max(Math.min(panX, 32), Math.min(aw - visualW - 32, 0));
+    panY = Math.max(Math.min(panY, 32), Math.min(ah - visualH - 32, 0));
     canvas.style.transformOrigin = "0 0";
     canvas.style.left = panX + "px";
     canvas.style.top = panY + "px";
