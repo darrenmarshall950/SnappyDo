@@ -1610,7 +1610,7 @@
       if (!id) {
         if (presetUndoSnapshot) {
           beginLocalPreview();
-          applyPresetToState(null, presetUndoSnapshot, { restoreLut: true });
+          restorePresetUndoSnapshot(presetUndoSnapshot);
           presetUndoSnapshot = null;
           state.preset_id = void 0;
           setStatus("Preset removed \u2014 restored the edits from before it was applied.", false);
@@ -1624,7 +1624,7 @@
       }
       const p = (window.__snappydoPresets || []).find((x) => x.id === id);
       if (!p) return;
-      if (!presetUndoSnapshot) presetUndoSnapshot = snapshotPreset();
+      if (!presetUndoSnapshot) presetUndoSnapshot = capturePresetUndoSnapshot();
       beginLocalPreview();
       const newLutId = p.params && p.params.lut_id ? Number(p.params.lut_id) : 0;
       const prevLutId = state.lut_id || 0;
@@ -1772,6 +1772,18 @@
       snapshot.curveCh = window._cvCh();
     }
     return snapshot;
+  }
+  function capturePresetUndoSnapshot() {
+    return {
+      state: JSON.parse(JSON.stringify(state)),
+      curve: JSON.parse(JSON.stringify(window._cvData || _cvData))
+    };
+  }
+  function restorePresetUndoSnapshot(snapshot) {
+    const restoredState = snapshot?.state || {};
+    Object.keys(state).forEach((key) => delete state[key]);
+    Object.assign(state, JSON.parse(JSON.stringify(restoredState)));
+    applyPresetToState(null, { ...restoredState, curve: snapshot?.curve }, { restoreLut: true });
   }
   function setWheelPointer(wheelId, hue, sat) {
     const el = document.getElementById(wheelId);

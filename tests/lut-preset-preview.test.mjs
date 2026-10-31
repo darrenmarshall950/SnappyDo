@@ -19,10 +19,10 @@ const presetStart = editor.indexOf("presetSelect.addEventListener('change'");
 const presetEnd = editor.indexOf('// Delete Preset button', presetStart);
 assert.ok(presetStart >= 0 && presetEnd > presetStart, 'preset change handler must exist');
 const presetHandler = editor.slice(presetStart, presetEnd);
-assert.match(presetHandler, /presetUndoSnapshot\s*=\s*snapshotPreset\(\)/,
-  'applying a preset must save the prior edit state');
-assert.match(presetHandler, /applyPresetToState\(null,\s*presetUndoSnapshot,\s*\{\s*restoreLut:\s*true\s*\}\)/,
-  'No preset must restore the edits that existed before the preset was applied');
+assert.match(presetHandler, /presetUndoSnapshot\s*=\s*capturePresetUndoSnapshot\(\)/,
+  'applying a preset must save the complete prior edit state');
+assert.match(presetHandler, /restorePresetUndoSnapshot\(presetUndoSnapshot\)/,
+  'No preset must restore the complete pre-preset edit state');
 assert.match(presetHandler, /beginLocalPreview\(\)/,
   'preset changes must reveal their local render immediately');
 assert.match(presetHandler, /scheduleAuthoritativePreview\(\)/,

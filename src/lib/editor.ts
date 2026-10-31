@@ -1930,7 +1930,7 @@ webglPipeline.render();
           if (!id) {
             if (presetUndoSnapshot) {
               beginLocalPreview();
-              applyPresetToState(null, presetUndoSnapshot, { restoreLut: true });
+              restorePresetUndoSnapshot(presetUndoSnapshot);
               presetUndoSnapshot = null;
               (state as any).preset_id = undefined;
               setStatus('Preset removed — restored the edits from before it was applied.', false);
@@ -1944,7 +1944,7 @@ webglPipeline.render();
           }
           const p = (window.__snappydoPresets || []).find((x) => x.id === id);
           if (!p) return;
-          if (!presetUndoSnapshot) presetUndoSnapshot = snapshotPreset();
+          if (!presetUndoSnapshot) presetUndoSnapshot = capturePresetUndoSnapshot();
           beginLocalPreview();
           const newLutId = p.params && p.params.lut_id ? Number(p.params.lut_id) : 0;
           const prevLutId = state.lut_id || 0;
@@ -2101,6 +2101,23 @@ webglPipeline.render();
           snapshot.curveCh = (window as any)._cvCh();
         }
         return snapshot;
+      }
+
+      function capturePresetUndoSnapshot() {
+        return {
+          state: JSON.parse(JSON.stringify(state)),
+          curve: JSON.parse(JSON.stringify((window as any)._cvData || _cvData)),
+        };
+      }
+
+      function restorePresetUndoSnapshot(snapshot: any) {
+        const restoredState = snapshot?.state || {};
+        // Presets can add fields which were absent beforehand. Replace the
+        // whole state first, then reuse the UI synchroniser for controls,
+        // curve and the exact former LUT/no-LUT selection.
+        Object.keys(state).forEach((key) => delete (state as any)[key]);
+        Object.assign(state, JSON.parse(JSON.stringify(restoredState)));
+        applyPresetToState(null, { ...restoredState, curve: snapshot?.curve }, { restoreLut: true });
       }
 
       // Move a colour wheel's pointer to (hue, sat 0..1) by directly manipulating the SVG circle.
