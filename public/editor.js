@@ -163,6 +163,12 @@
   var authoritativePreviewImage = new Image();
   var authoritativePreviewReady = false;
   var authoritativePreviewKey = "";
+  function beginLocalPreview() {
+    clearTimeout(authoritativePreviewTimer);
+    authoritativePreviewRequest++;
+    authoritativePreviewReady = false;
+    authoritativePreviewKey = "";
+  }
   function scheduleAuthoritativePreview() {
     clearTimeout(authoritativePreviewTimer);
     const request = ++authoritativePreviewRequest;
@@ -1545,6 +1551,7 @@
   if (lutSelect) {
     lutSelect.addEventListener("change", async () => {
       const v = lutSelect.value;
+      beginLocalPreview();
       state.lut_id = v ? Number(v) : 0;
       const presetSelectEl = document.getElementById("preset-select");
       if (state.lut_id && state.preset_id) {
@@ -1579,6 +1586,7 @@
         activeLut = null;
       }
       draw();
+      scheduleAuthoritativePreview();
     });
   }
   function updateDeletePresetButton() {
@@ -1594,23 +1602,36 @@
     btn.style.display = meta && meta.kind === "user" ? "inline-flex" : "none";
   }
   var presetSelect = document.getElementById("preset-select");
+  var presetUndoSnapshot = null;
   if (presetSelect) {
     presetSelect.addEventListener("change", () => {
       updateDeletePresetButton();
       const id = Number(presetSelect.value);
       if (!id) {
-        const hadPreset = !!state.preset_id;
-        state.preset_id = void 0;
-        if (hadPreset) setStatus("Preset removed \u2014 keeping current edits.", false);
+        if (presetUndoSnapshot) {
+          beginLocalPreview();
+          applyPresetToState(null, presetUndoSnapshot, { restoreLut: true });
+          presetUndoSnapshot = null;
+          state.preset_id = void 0;
+          setStatus("Preset removed \u2014 restored the edits from before it was applied.", false);
+          scheduleAuthoritativePreview();
+        } else {
+          const hadPreset = !!state.preset_id;
+          state.preset_id = void 0;
+          if (hadPreset) setStatus("Preset removed \u2014 prior edit state is unavailable after reload.", false);
+        }
         return;
       }
       const p = (window.__snappydoPresets || []).find((x) => x.id === id);
       if (!p) return;
+      if (!presetUndoSnapshot) presetUndoSnapshot = snapshotPreset();
+      beginLocalPreview();
       const newLutId = p.params && p.params.lut_id ? Number(p.params.lut_id) : 0;
       const prevLutId = state.lut_id || 0;
       const willReplaceLut = newLutId > 0 && newLutId !== prevLutId;
       const presetHasLut = newLutId > 0;
       applyPresetToState(id, p.params);
+      scheduleAuthoritativePreview();
       if (willReplaceLut && prevLutId > 0) {
         const newLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === newLutId);
         const prevLutMeta = (window.__snappydoLuts || []).find((x) => Number(x.id) === prevLutId);
@@ -1765,7 +1786,7 @@
     pointer.setAttribute("cx", String(px));
     pointer.setAttribute("cy", String(py));
   }
-  function applyPresetToState(presetId, params) {
+  function applyPresetToState(presetId, params, options = {}) {
     if (!params) return;
     if (presetId != null) state.preset_id = Number(presetId);
     const _prevLutId = state.lut_id || 0;
@@ -1877,9 +1898,25 @@
         if (typeof window._cvRefresh === "function") window._cvRefresh();
       }
     }
-    let newLutId = 0;
-    if (_presetHasLut) {
-      newLutId = Number(params.lut_id);
+    if (options.restoreLut) {
+      const restoredLutId = Number(params.lut_id) || 0;
+      state.lut_id = restoredLutId;
+      const lutSelEl = document.getElementById("lut-select");
+      if (lutSelEl) lutSelEl.value = restoredLutId ? String(restoredLutId) : "";
+      if (restoredLutId) {
+        fetchLutData(restoredLutId).then((d) => {
+          activeLut = d;
+          _sharpenCacheKey = -1;
+          applyVignetteOverlay();
+          draw();
+        }).catch(() => {
+          activeLut = null;
+        });
+      } else {
+        activeLut = null;
+      }
+    } else if (_presetHasLut) {
+      const newLutId = Number(params.lut_id);
       state.lut_id = newLutId;
       const lutSelEl = document.getElementById("lut-select");
       if (lutSelEl) lutSelEl.value = String(newLutId);
@@ -1892,7 +1929,6 @@
         activeLut = null;
       });
     } else if (_prevLutId) {
-      newLutId = _prevLutId;
       const lutSelEl = document.getElementById("lut-select");
       if (lutSelEl) lutSelEl.value = String(_prevLutId);
     } else {
@@ -1953,9 +1989,7 @@
       }
       applyVignetteOverlay();
       applyRawPreviewFx();
-      clearTimeout(authoritativePreviewTimer);
-      authoritativePreviewRequest++;
-      authoritativePreviewReady = false;
+      beginLocalPreview();
       scheduleDraw();
       if (RAW_KEYS.includes(key)) scheduleRawPreviewFetch("slider:" + key);
     });

@@ -11,7 +11,7 @@ const inputStart = slider.indexOf("input.addEventListener('input'");
 const inputEnd = slider.indexOf("input.addEventListener('change'", inputStart);
 assert.ok(inputStart >= 0 && inputEnd > inputStart, 'input and change handlers must both exist');
 const input = slider.slice(inputStart, inputEnd);
-assert.match(input, /authoritativePreviewReady\s*=\s*false/, 'slider input must reveal the immediate local preview');
+assert.match(input, /beginLocalPreview\(\)/, 'slider input must reveal the immediate local preview');
 assert.doesNotMatch(input, /scheduleAuthoritativePreview\(\)/, 'slider input must not wait for an authoritative server render');
 assert.match(slider.slice(inputEnd), /input\.addEventListener\('change',[\s\S]*?scheduleAuthoritativePreview\(\)/, 'slider release must request the authoritative parity render');
 

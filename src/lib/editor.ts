@@ -151,6 +151,15 @@ import { buildRenderRecipe } from "./render-recipe";
       function renderStateKey(): string {
         return JSON.stringify(buildRenderRecipe(state, _cvData));
       }
+      function beginLocalPreview() {
+        // A completed Sharp preview is a display overlay. Any local mutation
+        // must hide it immediately or LUT/preset changes appear to do nothing
+        // until an unrelated slider redraw.
+        clearTimeout(authoritativePreviewTimer);
+        authoritativePreviewRequest++;
+        authoritativePreviewReady = false;
+        authoritativePreviewKey = '';
+      }
       function scheduleAuthoritativePreview() {
         clearTimeout(authoritativePreviewTimer);
         const request = ++authoritativePreviewRequest;
@@ -1847,6 +1856,7 @@ webglPipeline.render();
       if (lutSelect) {
         lutSelect.addEventListener('change', async () => {
           const v = lutSelect.value;
+          beginLocalPreview();
           state.lut_id = v ? Number(v) : 0;
 
           // If a preset is active and that preset has its own LUT, clearing
@@ -1893,6 +1903,7 @@ webglPipeline.render();
             activeLut = null;
           }
           draw();
+          scheduleAuthoritativePreview();
         });
       }
 
@@ -1909,26 +1920,39 @@ webglPipeline.render();
 
       // Preset apply → load params into state + sliders + LUT select
       const presetSelect = document.getElementById('preset-select');
+      // A preset is an applied look, not merely a label. Keep the pre-apply
+      // state so choosing No preset can genuinely undo that application.
+      let presetUndoSnapshot = null;
       if (presetSelect) {
         presetSelect.addEventListener('change', () => {
           updateDeletePresetButton();
           const id = Number(presetSelect.value);
           if (!id) {
-            const hadPreset = !!state.preset_id;
-            (state as any).preset_id = undefined;
-            if (hadPreset) setStatus('Preset removed — keeping current edits.', false);
+            if (presetUndoSnapshot) {
+              beginLocalPreview();
+              applyPresetToState(null, presetUndoSnapshot, { restoreLut: true });
+              presetUndoSnapshot = null;
+              (state as any).preset_id = undefined;
+              setStatus('Preset removed — restored the edits from before it was applied.', false);
+              scheduleAuthoritativePreview();
+            } else {
+              const hadPreset = !!state.preset_id;
+              (state as any).preset_id = undefined;
+              if (hadPreset) setStatus('Preset removed — prior edit state is unavailable after reload.', false);
+            }
             return;
           }
           const p = (window.__snappydoPresets || []).find((x) => x.id === id);
           if (!p) return;
-
-          // Detect LUT replacement BEFORE we apply, so we can notify.
+          if (!presetUndoSnapshot) presetUndoSnapshot = snapshotPreset();
+          beginLocalPreview();
           const newLutId = p.params && p.params.lut_id ? Number(p.params.lut_id) : 0;
           const prevLutId = state.lut_id || 0;
           const willReplaceLut = newLutId > 0 && newLutId !== prevLutId;
           const presetHasLut = newLutId > 0;
 
           applyPresetToState(id, p.params);
+          scheduleAuthoritativePreview();
 
           // Notify user about LUT interactions
           if (willReplaceLut && prevLutId > 0) {
@@ -2098,7 +2122,7 @@ webglPipeline.render();
       //  (optional) — when provided, also stamps state.preset_id so
       // the preset can be re-selected on reopen and cleared when the user
       // changes the LUT manually.
-      function applyPresetToState(presetId: any, params: any) {
+      function applyPresetToState(presetId: any, params: any, options: { restoreLut?: boolean } = {}) {
         if (!params) return;
         // Stamp the preset id first so downstream UI updates see it.
         if (presetId != null) (state as any).preset_id = Number(presetId);
@@ -2218,13 +2242,26 @@ webglPipeline.render();
             if (typeof (window as any)._cvRefresh === 'function') (window as any)._cvRefresh();
           }
         }
-        // 6. LUT — set the dropdown and (async) load the data.
-        // If the preset has its own LUT, replace whatever was there.
-        // If the preset has NO LUT, keep the user's manual LUT (and keep
-        // its data loaded) so preset + LUT can coexist.
-        let newLutId = 0;
-        if (_presetHasLut) {
-          newLutId = Number(params.lut_id);
+        // 6. LUT — a normal preset without a LUT preserves a manual LUT.
+        // Restoring No preset is different: restore the exact pre-preset LUT,
+        // including an explicit no-LUT state.
+        if (options.restoreLut) {
+          const restoredLutId = Number(params.lut_id) || 0;
+          state.lut_id = restoredLutId;
+          const lutSelEl = document.getElementById('lut-select');
+          if (lutSelEl) lutSelEl.value = restoredLutId ? String(restoredLutId) : '';
+          if (restoredLutId) {
+            fetchLutData(restoredLutId).then((d) => {
+              activeLut = d;
+              _sharpenCacheKey = -1;
+              applyVignetteOverlay();
+              draw();
+            }).catch(() => { activeLut = null; });
+          } else {
+            activeLut = null;
+          }
+        } else if (_presetHasLut) {
+          const newLutId = Number(params.lut_id);
           state.lut_id = newLutId;
           const lutSelEl = document.getElementById('lut-select');
           if (lutSelEl) lutSelEl.value = String(newLutId);
@@ -2236,12 +2273,10 @@ webglPipeline.render();
           }).catch(() => { activeLut = null; });
         } else if (_prevLutId) {
           // Preset has no LUT — preserve the user's manual LUT.
-          newLutId = _prevLutId;
-          // state.lut_id already set; ensure dropdown matches
           const lutSelEl = document.getElementById('lut-select');
           if (lutSelEl) lutSelEl.value = String(_prevLutId);
         } else {
-          // No preset LUT, no manual LUT — clear
+          // No preset LUT, no manual LUT — clear.
           state.lut_id = 0;
           const lutSelEl = document.getElementById('lut-select');
           if (lutSelEl) lutSelEl.value = '';
@@ -2308,9 +2343,7 @@ webglPipeline.render();
           // Slider input must stay responsive. Hide the previous authoritative
           // frame and let the local pipeline update immediately; the exact
           // Sharp render is requested once the user releases the slider.
-          clearTimeout(authoritativePreviewTimer);
-          authoritativePreviewRequest++;
-          authoritativePreviewReady = false;
+          beginLocalPreview();
           scheduleDraw();
           // RAW preview-render: re-fetch on slider-release (debounced 300ms).
           // Only fires if the slider is one of the RAW-only keys.

@@ -9,8 +9,10 @@ assert.match(editor, /sel\.innerHTML\s*=\s*'<option value="">No preset<\/option>
 
 const handlerStart = editor.indexOf("presetSelect.addEventListener('change'");
 assert.ok(handlerStart >= 0, 'preset change handler must exist');
-const handler = editor.slice(handlerStart, editor.indexOf('// Detect LUT replacement', handlerStart));
-assert.match(handler, /if \(!id\)\s*\{[\s\S]*?preset_id\s*=\s*undefined[\s\S]*?return;/, 'choosing No preset must detach the preset association');
-assert.doesNotMatch(handler, /resetAllStateAndUi\(|applyPresetToState\(/, 'choosing No preset must keep the current edit values');
+const handler = editor.slice(handlerStart, editor.indexOf('// Delete Preset button', handlerStart));
+assert.match(editor, /let presetUndoSnapshot = null/, 'a pre-preset state must be retained');
+assert.match(handler, /presetUndoSnapshot\s*=\s*snapshotPreset\(\)/, 'applying a preset must capture the prior edits');
+assert.match(handler, /applyPresetToState\(null,\s*presetUndoSnapshot,\s*\{\s*restoreLut:\s*true\s*\}\)/, 'No preset must restore the prior edits and LUT');
+assert.match(handler, /presetUndoSnapshot\s*=\s*null/, 'the one-shot undo snapshot must clear after restoration');
 
-console.log('No preset detaches the selected preset without resetting current edits');
+console.log('No preset restores the edits that existed before applying the preset');
