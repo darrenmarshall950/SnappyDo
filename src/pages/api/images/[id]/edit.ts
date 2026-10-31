@@ -485,7 +485,7 @@ export const POST: APIRoute = async ({ params, request }) => {
     } catch {
       return badRequest('invalid JSON');
     }
-    paramsObj = body?.params;
+    paramsObj = body?.recipe?.params ?? body?.params;
     if (!paramsObj || typeof paramsObj !== 'object') return badRequest('params required');
 
     let originalPath = join(UPLOAD_DIR, img.path);

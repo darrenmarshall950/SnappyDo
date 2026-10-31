@@ -1,4 +1,5 @@
 import { isFlat, applyToneCurveToRgba } from "./curve";
+import { buildRenderRecipe } from "./render-recipe";
       const RAW_DEFAULTS = {
         raw_wb_kelvin: 5500,
         raw_wb_tint: 0,
@@ -148,9 +149,7 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
       let authoritativePreviewKey = '';
       // A stable signature of everything that affects the rendered image.
       function renderStateKey(): string {
-        const clone: any = { ...state };
-        delete clone.snapshots; // UI-only list of saved snapshots
-        return JSON.stringify({ params: clone, curve: _cvData });
+        return JSON.stringify(buildRenderRecipe(state, _cvData));
       }
       function scheduleAuthoritativePreview() {
         clearTimeout(authoritativePreviewTimer);
@@ -160,10 +159,11 @@ import { isFlat, applyToneCurveToRgba } from "./curve";
         // Capture the key NOW. If the state changes while the server renders,
         // the returned preview no longer matches what is on screen and must be
         // discarded instead of replacing a newer result.
-        const key = renderStateKey();
+        const recipe = buildRenderRecipe(state, _cvData);
+        const key = JSON.stringify(recipe);
         authoritativePreviewTimer = setTimeout(async () => {
           try {
-            const r = await fetch('/api/images/' + imageId + '/preview-edit', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({params: {...state, curve: _cvData}}) });
+            const r = await fetch('/api/images/' + imageId + '/preview-edit', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({recipe}) });
             if (!r.ok || request !== authoritativePreviewRequest) return;
             const blob = await r.blob();
             if (!blob.size || request !== authoritativePreviewRequest) return;
@@ -3112,10 +3112,11 @@ webglPipeline.render();
         btnSave.disabled = true;
         setStatus('Saving…');
         try {
+          const recipe = buildRenderRecipe(state, _cvData);
           const res = await fetch('/api/images/' + imageId + '/edit', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ params: { ...state, history: _history, curve: _cvData }, sourceUrl }),
+            body: JSON.stringify({recipe, sourceUrl}),
           });
           if (!res.ok) throw new Error(await res.text());
           const data = await res.json();

@@ -57,6 +57,25 @@
     }
   }
 
+  // src/lib/render-recipe.ts
+  var UI_ONLY_KEYS = /* @__PURE__ */ new Set([
+    "snapshots",
+    "history",
+    "_appliedCrop",
+    "_appliedLut"
+  ]);
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+  function buildRenderRecipe(state2, curve) {
+    const params = {};
+    for (const [key, value] of Object.entries(state2 || {})) {
+      if (!UI_ONLY_KEYS.has(key) && value !== void 0) params[key] = clone(value);
+    }
+    params.curve = clone(curve);
+    return { version: 1, params };
+  }
+
   // src/lib/editor.ts
   var RAW_DEFAULTS = {
     raw_wb_kelvin: 5500,
@@ -144,18 +163,14 @@
   var authoritativePreviewImage = new Image();
   var authoritativePreviewReady = false;
   var authoritativePreviewKey = "";
-  function renderStateKey() {
-    const clone = { ...state };
-    delete clone.snapshots;
-    return JSON.stringify({ params: clone, curve: _cvData });
-  }
   function scheduleAuthoritativePreview() {
     clearTimeout(authoritativePreviewTimer);
     const request = ++authoritativePreviewRequest;
-    const key = renderStateKey();
+    const recipe = buildRenderRecipe(state, _cvData);
+    const key = JSON.stringify(recipe);
     authoritativePreviewTimer = setTimeout(async () => {
       try {
-        const r = await fetch("/api/images/" + imageId + "/preview-edit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ params: { ...state, curve: _cvData } }) });
+        const r = await fetch("/api/images/" + imageId + "/preview-edit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ recipe }) });
         if (!r.ok || request !== authoritativePreviewRequest) return;
         const blob = await r.blob();
         if (!blob.size || request !== authoritativePreviewRequest) return;
@@ -2710,10 +2725,11 @@
     btnSave.disabled = true;
     setStatus("Saving\u2026");
     try {
+      const recipe = buildRenderRecipe(state, _cvData);
       const res = await fetch("/api/images/" + imageId + "/edit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ params: { ...state, history: _history, curve: _cvData }, sourceUrl })
+        body: JSON.stringify({ recipe, sourceUrl })
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
