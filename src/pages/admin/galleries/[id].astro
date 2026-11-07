@@ -376,11 +376,12 @@ const images = listImagesForGallery(g.id);
         .image-card__actions {
           padding: 0.5rem 0.75rem;
           display: flex;
+          flex-wrap: wrap;
           gap: 0.4rem;
           border-top: 1px solid #262626;
         }
         .image-card__actions .admin-btn {
-          flex: 1;
+          flex: 1 1 auto;
           justify-content: center;
           padding: 0.35rem 0.6rem;
           font-size: 0.75rem;
