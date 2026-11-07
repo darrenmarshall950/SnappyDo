@@ -866,6 +866,7 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
             </svg>
           </button>
           <button class="btn btn--danger" id="btn-revert" disabled={!latestEdit}>Revert to original</button>
+          <button class="btn" id="btn-download" title="Download the edited photo at full resolution (includes unsaved changes)">Download</button>
           <button class="btn btn--primary" id="btn-save">Save edit</button>
         </div>
       </header>
@@ -1476,6 +1477,7 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
       initialParamsJson: INITIAL_PARAMS_JSON,
       hasExistingEdit: !!latestEdit,
       rawPreviewEnabled,
+      originalName: img.original_name,
     }}>
       window.__EDITOR_DATA__ = {
         imageId,
@@ -1483,6 +1485,7 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
         initialParams: JSON.parse(initialParamsJson),
         hasExistingEdit,
         rawPreviewEnabled,
+        originalName,
       };
     </script>
     <script src="/editor.js" is:inline></script>

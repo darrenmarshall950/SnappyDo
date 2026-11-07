@@ -143,7 +143,9 @@ const images = listImagesForGallery(g.id);
           </header>
 
           <div class="image-grid" id="image-grid">
-            {images.map((image) => (
+            {images.map((image) => {
+              const savedEdit = latestEditFor(image.id);
+              return (
               <div class="image-card" data-image-id={image.id}>
                 <label class="image-card__select">
                   <input type="checkbox" class="image-check" value={image.id} />
@@ -156,7 +158,7 @@ const images = listImagesForGallery(g.id);
                     alt={image.original_name}
                     loading="lazy"
                   />
-                  {latestEditFor(image.id) && (
+                  {savedEdit && (
                     <span class="image-card__edited-badge" title="This image has a saved edit">EDITED</span>
                   )}
                 </a>
@@ -166,10 +168,14 @@ const images = listImagesForGallery(g.id);
                 </div>
                 <div class="image-card__actions">
                   <a class="admin-btn admin-btn--ghost" href={`/admin/edit/${image.id}`}>Edit</a>
+                  {savedEdit && (
+                    <a class="admin-btn admin-btn--ghost" href={`/api/images/${image.id}/export`} title="Download the saved edited photo">Download</a>
+                  )}
                   <button type="button" class="admin-btn admin-btn--danger" data-delete-one={image.id} data-name={image.original_name}>Delete</button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}
