@@ -1,6 +1,6 @@
 # ---------- Stage 1: deps ----------
 # Install dependencies in a clean layer for caching
-FROM node:20-bookworm-slim AS deps
+FROM node:22-trixie-slim AS deps
 WORKDIR /app
 
 # Install OS deps needed for sharp/Astro image optimization
@@ -15,7 +15,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 
 # ---------- Stage 2: build ----------
-FROM node:20-bookworm-slim AS build
+FROM node:22-trixie-slim AS build
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -35,20 +35,24 @@ RUN npm run build
 
 # ---------- Stage 3: runtime ----------
 # Minimal runtime image — Node only, no build tools
-FROM node:20-bookworm-slim AS runtime
+FROM node:22-trixie-slim AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3000
 
-# Runtime libs only (no compilers)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libvips42 \
+# Runtime libs only (no compilers). OM-3 files need darktable 5.4+,
+# available from Debian unstable; retain a low priority so only this explicit
+# install comes from unstable rather than upgrading the entire base image.
+RUN printf 'deb http://deb.debian.org/debian unstable main\n' \
+        > /etc/apt/sources.list.d/unstable.list && \
+    printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' \
+        > /etc/apt/preferences.d/unstable && \
+    apt-get update && apt-get install -y --no-install-recommends -t unstable \
     ocl-icd-libopencl1 \
     clinfo \
     darktable \
-    libexiv2-27 \
     exiftool \
     dumb-init \
     && rm -rf /var/lib/apt/lists/*

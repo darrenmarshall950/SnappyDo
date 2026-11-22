@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 
 const page = readFileSync(new URL('../src/pages/upload.astro', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../src/pages/api/upload.ts', import.meta.url), 'utf8');
+const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
 
 assert.match(
   page,
@@ -35,4 +36,15 @@ assert.ok(pipelineStart >= 0, 'the upload write must be represented by a promise
 assert.ok(pipelineAwait > pipelineStart, 'file processing must await the write promise');
 assert.ok(pipelineAwait < rawMove, 'the RAW must not move or render before its write has flushed');
 
-console.log('RAW uploads are serialised and wait for disk flush');
+assert.match(
+  dockerfile,
+  /deb\s+http:\/\/deb\.debian\.org\/debian\s+unstable\s+main/,
+  'the runtime must install a darktable build recent enough to recognise OM-3 RAW files',
+);
+assert.match(
+  dockerfile,
+  /apt-get install -y --no-install-recommends[\s\S]{0,600}darktable/,
+  'the runtime must install darktable',
+);
+
+console.log('RAW uploads are serialised, wait for disk flush, and use current camera support');
