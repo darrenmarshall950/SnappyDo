@@ -244,6 +244,10 @@ const galleries = listGalleries();
 
             const BATCH_SIZE = 8;
             const BATCH_CONCURRENCY = 3;
+            // RAW preview rendering runs through darktable-cli, so keep it
+            // isolated from the lightweight JPEG queue and serialised.
+            const RAW_BATCH_SIZE = 1;
+            const RAW_BATCH_CONCURRENCY = 1;
             const MAX_RETRIES = 3;
             const STORAGE_PREFIX = 'snappydo-uploads:';
 
@@ -528,11 +532,21 @@ const galleries = listGalleries();
                 progressFill.style.width = Math.min(100, pct) + '%';
               };
 
-              const chunks = chunk(toUpload.map((f, i) => ({ file: f, originalIndex: i })), BATCH_SIZE);
-              log(`uploading ${toUpload.length} file(s) in ${chunks.length} batch(es), ${BATCH_CONCURRENCY} in parallel`, true);
+              const normalFiles = toUpload
+                .map((file, originalIndex) => ({ file, originalIndex }))
+                .filter(({ file }) => !isRawFile(file));
+              const rawFiles = toUpload
+                .map((file, originalIndex) => ({ file, originalIndex }))
+                .filter(({ file }) => isRawFile(file));
+              const normalChunks = chunk(normalFiles, BATCH_SIZE);
+              const rawChunks = chunk(rawFiles, RAW_BATCH_SIZE);
+              const chunks = [...normalChunks, ...rawChunks];
+              log(`uploading ${toUpload.length} file(s) in ${chunks.length} batch(es): ${BATCH_CONCURRENCY} normal batch(es) and ${RAW_BATCH_CONCURRENCY} RAW batch in parallel`, true);
 
-              // Process chunks with bounded parallelism
-              const tasks = chunks.map((batch, idx) => async () => {
+              // Process ordinary images quickly, but never let RAW previews fan
+              // out into many simultaneous darktable-cli processes.
+              const makeTasks = (batches, startIndex) => batches.map((batch, offset) => async () => {
+                const idx = startIndex + offset;
                 const batchNames = batch.map((b) => b.file.name).join(', ');
                 try {
                   const res = await sendChunkWithRetry(slug, batch.map((b) => b.file), ({ phase, fileStates }) => {
@@ -576,7 +590,12 @@ const galleries = listGalleries();
                 }
               });
 
-              await runParallel(tasks, BATCH_CONCURRENCY, async (t) => t());
+              const normalTasks = makeTasks(normalChunks, 0);
+              const rawTasks = makeTasks(rawChunks, normalChunks.length);
+              await Promise.all([
+                runParallel(normalTasks, BATCH_CONCURRENCY, async (t) => t()),
+                runParallel(rawTasks, RAW_BATCH_CONCURRENCY, async (t) => t()),
+              ]);
 
               // Persist session for resume
               saveSession(slug, session);

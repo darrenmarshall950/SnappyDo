@@ -189,13 +189,16 @@ export const POST: APIRoute = async ({ request }) => {
         file.resume();
       });
 
-      pipelineAsync(file, out).catch((err: Error) => {
+      const writeCompleted = pipelineAsync(file, out).catch((err: Error) => {
         errors.push(`write failed for ${filename}: ${err.message}`);
         limitHit = true;
       });
 
       file.on('end', async () => {
         try {
+          // The readable ending only means Node has consumed the upload. Wait
+          // for the WriteStream to flush before moving or rendering a RAW.
+          await writeCompleted;
           if (limitHit) return;
           if (!gallerySlug) {
             errors.push(`skipped ${filename}: missing gallery_slug field`);
