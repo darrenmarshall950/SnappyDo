@@ -424,7 +424,7 @@ export async function renderWithSharp(originalPath: string, params: any): Promis
  * means darktable applies its built-in defaults (sensible demosaic +
  * sRGB output).
  */
-async function renderWithDarktable(rawPath: string, outputPath: string, timeoutMs: number, xmpOpts?: { kelvin: number; tint: number; baseline?: { r: number; g: number; b: number }; lens_on?: boolean; nr_lum?: number; nr_chroma?: number }): Promise<void> {
+async function renderWithDarktable(rawPath: string, outputPath: string, timeoutMs: number, xmpOpts?: { kelvin: number; tint: number; baseline?: { r: number; g: number; b: number }; baselineKnown?: boolean; lens_on?: boolean; nr_lum?: number; nr_chroma?: number }): Promise<void> {
   await mkdir('/app/.config/darktable', { recursive: true });
   await mkdir('/app/.cache/darktable', { recursive: true });
   const xmpPath = '/tmp/snappydo-raw-sidecar.xmp';
@@ -436,6 +436,12 @@ async function renderWithDarktable(rawPath: string, outputPath: string, timeoutM
     kelvin: xmpOpts?.kelvin ?? 5500,
     tint: xmpOpts?.tint ?? 0,
     baseline,
+    // When the camera's as-shot WB could not be read, the baseline is a
+    // placeholder. Writing it into darktable's temperature module would
+    // REPLACE the camera's real WB and cast the image green. Passing
+    // baselineKnown: false makes buildDarktableXmp omit the module so
+    // darktable uses the camera's own WB — matching the editor preview.
+    baselineKnown: xmpOpts?.baselineKnown ?? true,
     lens_on: xmpOpts?.lens_on ?? false,
     nr_lum: xmpOpts?.nr_lum ?? 0,
     nr_chroma: xmpOpts?.nr_chroma ?? 0,
@@ -513,6 +519,7 @@ export const POST: APIRoute = async ({ params, request }) => {
           kelvin,
           tint: tintForDt,
           baseline,
+          baselineKnown: baseline.known,
           lens_on: lensOn,
           nr_lum: nrLum,
           nr_chroma: nrChroma,

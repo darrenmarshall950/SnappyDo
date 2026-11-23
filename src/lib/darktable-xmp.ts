@@ -67,7 +67,21 @@ const execFileP = promisify(execFile);
 
 // In-memory cache for exiftool results. Keyed by `${path}:${mtime}:${size}`
 // so cache invalidates naturally when the RAW file is replaced.
-const wbCache = new Map<string, { r: number; g: number; b: number; source: string }>();
+export interface CameraWb {
+  r: number;
+  g: number;
+  b: number;
+  source: string;
+  /**
+   * True when the coefficients were actually read from the file's EXIF.
+   * False means "we could not find the camera's as-shot WB" — in that case
+   * the coefficients are a placeholder and MUST NOT be written into
+   * darktable's temperature module (see computeWb).
+   */
+  known: boolean;
+}
+
+const wbCache = new Map<string, CameraWb>();
 
 /**
  * Read the camera's auto/daylight WB coefficients from a RAW file's EXIF.
@@ -78,7 +92,7 @@ const wbCache = new Map<string, { r: number; g: number; b: number; source: strin
  *
  * (See full docstring at top of file.)
  */
-export async function readCameraWb(rawPath: string): Promise<{ r: number; g: number; b: number; source: string }> {
+export async function readCameraWb(rawPath: string): Promise<CameraWb> {
   // Check cache first
   try {
     const st = await stat(rawPath);
@@ -95,7 +109,7 @@ export async function readCameraWb(rawPath: string): Promise<{ r: number; g: num
   }
 }
 
-async function computeWb(rawPath: string): Promise<{ r: number; g: number; b: number; source: string }> {
+async function computeWb(rawPath: string): Promise<CameraWb> {
   try {
     const { stdout } = await execFileP('exiftool', [
       '-j', '-n', rawPath,
@@ -118,7 +132,7 @@ async function computeWb(rawPath: string): Promise<{ r: number; g: number; b: nu
     const rggbAuto = parseNums(tags.WB_RGGBLevelsAuto || tags.WB_RGGBLevels);
     if (rggbAuto.length === 4 && rggbAuto.every(n => n > 0)) {
       const [r, g, , b] = rggbAuto;
-      return { r: r / g, g: 1.0, b: b / g, source: 'RGGBLevelsAuto' };
+      return { r: r / g, g: 1.0, b: b / g, source: 'RGGBLevelsAuto', known: true };
     }
 
     // 2. RGB triplet
@@ -132,13 +146,33 @@ async function computeWb(rawPath: string): Promise<{ r: number; g: number; b: nu
       const v = parseNums(tags[key]);
       if (v.length >= 3 && v.every(n => n > 0)) {
         const [r, g, b] = v;
-        return { r: r / g, g: 1.0, b: b / g, source: label };
+        return { r: r / g, g: 1.0, b: b / g, source: label, known: true };
       }
     }
 
-    return { r: 1.0, g: 1.0, b: 1.0, source: 'fallback D65' };
+    // 3. Anything else — we do NOT have a camera WB we can express in
+    //    darktable's temperature-module terms.
+    //
+    //    Olympus ORF files DO carry their WB, but under vendor tags
+    //    (WB_RBLevels "R G B ref", Composite RedBalance/BlueBalance) whose
+    //    semantics do NOT match darktable's temperature module. Measured on
+    //    an OM-3 ORF:
+    //
+    //      camera WB, no XMP            ge -71.63   <- correct (editor preview)
+    //      baseline from WB_RBLevels    ge  13.64   <- wrong
+    //      baseline from RedBalance     ge -63.19   <- close, still wrong
+    //      baseline (1,1,1) placeholder ge   3.74   <- the reported GREEN bug
+    //
+    //    The only value that reproduces the editor preview EXACTLY is
+    //    omitting the temperature module entirely, so darktable applies the
+    //    camera's own as-shot WB.
+    //
+    //    So `known: false` here. The XMP builder then omits the temperature
+    //    module at a neutral kelvin/tint, and the saved render matches the
+    //    editor preview pixel for pixel.
+    return { r: 1.0, g: 1.0, b: 1.0, source: 'camera-wb-not-expressible', known: false };
   } catch (e) {
-    return { r: 1.0, g: 1.0, b: 1.0, source: 'fallback D65 (err)' };
+    return { r: 1.0, g: 1.0, b: 1.0, source: 'unknown (err)', known: false };
   }
 }
 
@@ -358,6 +392,14 @@ export interface DarktableXmpOptions {
   kelvin?: number;        // colour temperature (default 5500 = neutral)
   tint?: number;          // ±100 slider (default 0)
   baseline: { r: number; g: number; b: number };  // camera WB from EXIF
+  /**
+   * False when the camera's as-shot WB could not be read from the file.
+   * When false AND the kelvin/tint are neutral, the temperature module is
+   * omitted entirely so darktable applies the camera's own WB — which is
+   * exactly what the editor preview shows. Writing the placeholder
+   * (1,1,1) instead would REPLACE the camera's WB and cast the image green.
+   */
+  baselineKnown?: boolean;
   lens_on?: boolean;      // 1 = enable embedded-metadata lens correction
   nr_lum?: number;        // 0-100 denoise luminance
   nr_chroma?: number;     // 0-100 denoise chroma
@@ -367,9 +409,14 @@ export interface DarktableXmpOptions {
  * Build a darktable 4.2.1 XMP sidecar string in v1 format.
  *
  * Modules in pipeline order:
- *   1. temperature (ALWAYS — its params include the baseline coeffs so
- *      the neutral-state render matches auto-WB; without it darktable
- *      does NOT apply any WB and the image is unprocessed greenish raw).
+ *   1. temperature (normally ALWAYS — its params include the baseline
+ *      coeffs so the neutral-state render matches auto-WB; without it
+ *      darktable does NOT apply any WB and the image is unprocessed
+ *      greenish raw).
+ *      EXCEPTION: when `baselineKnown` is false AND the kelvin/tint are
+ *      neutral, the module is OMITTED so darktable uses the camera's own
+ *      WB. Writing the placeholder (1,1,1) over a real camera WB casts
+ *      the image green (verified on an OM-3 ORF).
  *   2. lens (CONDITIONAL — only when lens_on=true; emitting it with
  *      modify_flags=0 has no effect, but we skip it to keep XMP clean).
  *   3. denoiseprofile (CONDITIONAL — only when nr_lum+nr_chroma > 0;
@@ -387,20 +434,37 @@ export function buildDarktableXmp(opts: DarktableXmpOptions): string {
   const modules: Array<{ op: string; modversion: number; params: Buffer }> = [];
   const iopOrderNames: string[] = [];
 
-  // Temperature: ALWAYS
-  modules.push({
-    op: 'temperature',
-    modversion: 3,
-    params: temperatureParams(kelvin, tint, opts.baseline),
-  });
-  iopOrderNames.push('temperature');
+  // Temperature: normally ALWAYS. Its params include the camera baseline
+  // coefficients so the neutral-state render matches the camera's auto-WB.
+  //
+  // EXCEPTION — when the camera's as-shot WB could NOT be read from the
+  // file, writing the placeholder (1,1,1) would REPLACE a perfectly good
+  // camera WB with "no correction", which darktable interprets as a
+  // neutral point at the module's own temperature and casts the image
+  // strongly green. (Measured on an OM-3 ORF: camera WB render gave
+  // green_excess -71.6, placeholder baseline gave +3.7 — a green cast.)
+  //
+  // So when the baseline is unknown and the user has not asked for a WB
+  // shift, omit the temperature module entirely: darktable then applies
+  // the camera's own WB, matching the editor preview exactly.
+  const deltaK = (kelvin - 5500) / 1000;
+  const baselineKnown = opts.baselineKnown !== false;
+  const neutralWb = Math.abs(deltaK) <= 0.05 && Math.abs(tint) < 0.5;
+
+  if (baselineKnown || !neutralWb) {
+    modules.push({
+      op: 'temperature',
+      modversion: 3,
+      params: temperatureParams(kelvin, tint, opts.baseline),
+    });
+    iopOrderNames.push('temperature');
+  }
 
   // Colorbalance: only when WB shift is dramatic (|deltaK| > 0.5)
   // — adds multiplicative gain on top of temperature's chromatic
   // adaptation. Provides the "extra drama" for users wanting bold
   // sunset/sunrise looks that the temperature module alone can't
   // deliver due to its white-point preservation.
-  const deltaK = (kelvin - 5500) / 1000;
   if (Math.abs(deltaK) > 0.5) {
     modules.push({
       op: 'colorbalance',
@@ -455,6 +519,7 @@ if (process.argv[1] && process.argv[1].endsWith('darktable-xmp.ts')) {
     kelvin: 5500,
     tint: 0,
     baseline: { r: 2.65, g: 1.0, b: 1.62 },
+    baselineKnown: true,
     lens_on: true,
     nr_lum: 50,
     nr_chroma: 30,
