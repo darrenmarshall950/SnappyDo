@@ -94,6 +94,7 @@
   var btnSave = document.getElementById("btn-save");
   var btnRevert = document.getElementById("btn-revert");
   var btnReset = document.getElementById("btn-reset");
+  var btnDownload = document.getElementById("btn-download");
   var isIOS = typeof navigator !== "undefined" && (/iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   var _origCanvas = document.getElementById("preview");
   var canvas = _origCanvas.cloneNode(false);
@@ -2792,6 +2793,44 @@
       setStatus("Save failed: " + e.message, true);
     } finally {
       btnSave.disabled = false;
+    }
+  };
+  function exportFilenameFromResponse(res, fallback) {
+    const cd = res.headers.get("content-disposition") || "";
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(cd);
+    return m ? decodeURIComponent(m[1].trim()) : fallback;
+  }
+  btnDownload.onclick = async () => {
+    btnDownload.disabled = true;
+    setStatus("Rendering full-resolution download\u2026");
+    try {
+      const recipe = buildRenderRecipe(state, _cvData);
+      const res = await fetch("/api/images/" + imageId + "/export", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ recipe })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const originalName = (window.__EDITOR_DATA__.originalName || "image").replace(/\.[^.]+$/, "");
+      const fallback = originalName + "-edited.jpg";
+      const filename = exportFilenameFromResponse(res, fallback);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3e4);
+      const mb = Math.round(blob.size / 1048576 * 10) / 10;
+      setStatus("Downloaded " + filename + " (" + mb + " MB).");
+      toast("Download started.");
+    } catch (e) {
+      console.error(e);
+      setStatus("Download failed: " + e.message, true);
+    } finally {
+      btnDownload.disabled = false;
     }
   };
   btnRevert.onclick = async () => {
