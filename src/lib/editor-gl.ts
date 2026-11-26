@@ -288,7 +288,7 @@ void main() {
 
 // ─── LUT-only fragment shader ──────────────────────────────────────────────
 // Standalone 3D LUT application pass. Used to apply LUT AFTER curve and
-// HSL/ST/grain/calibration rather than bundled into Pass 1, so the canvas
+// HSL/grain rather than bundled into Pass 1, so the canvas
 // pipeline order matches the server renderWithSharp() pipeline order.
 const LUT_ONLY_FRAG = `#version 300 es
 precision highp float;
@@ -373,12 +373,6 @@ uniform sampler2D uSource;
 // ── Time for grain animation ─────────────────────────────────────────────────
 uniform float uTime;
 
-// ── Split Toning ─────────────────────────────────────────────────────────────
-uniform float uStShadowsHue;
-uniform float uStShadowsSat;
-uniform float uStHighlightsHue;
-uniform float uStHighlightsSat;
-uniform float uStBalance;
 
 // ── Grain ────────────────────────────────────────────────────────────────────
 uniform float uGrainAmount;
@@ -518,26 +512,6 @@ void main() {
 
   c = applyColorGrading(c);
 
-  // ── Split Toning ─────────────────────────────────────────────────────────
-  if (uStShadowsSat > 0.0 || uStHighlightsSat > 0.0 || uStBalance != 0.0) {
-    float luma = dot(c, vec3(0.299, 0.587, 0.114));
-    float pivot = 0.35 + uStBalance * 0.003;
-    float hlRatio = smoothstep(pivot - 0.1, pivot + 0.1, luma);
-
-    float shH = fract(uStShadowsHue / 360.0);
-    float shS = uStShadowsSat / 100.0;
-    vec3 shadowTint = hsl2rgb(vec3(shH, shS, 0.5));
-
-    float hiH = fract(uStHighlightsHue / 360.0);
-    float hiS = uStHighlightsSat / 100.0;
-    vec3 highlightTint = hsl2rgb(vec3(hiH, hiS, 0.5));
-
-    vec3 tint = mix(shadowTint, highlightTint, hlRatio);
-    float avgSat = (uStShadowsSat + uStHighlightsSat) / 200.0;
-    float blend = avgSat * 0.5;
-    c = c + (tint - 0.5) * blend;
-  }
-
   // ── Dehaze ───────────────────────────────────────────────────────────────
   if (uDehaze != 0.0) {
     float haze = min(c.r, min(c.g, c.b));
@@ -568,41 +542,6 @@ void main() {
 `;
 
 
-// ─── Calibration (Camera Profile) ─────────────────────────────────────
-// Final pass: applies shadow tint hue shift + global saturation boost.
-const CALIBRATION_FRAG = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
-uniform sampler2D uSource;
-uniform float uShadowTint;  // -100..+100 (0=neutral)
-uniform float uCalSat;      // 0..100 extra saturation
-
-void main() {
-  vec3 c = texture(uSource, vUv).rgb;
-
-  // Shadow tint: shift hue in shadows only
-  if (abs(uShadowTint) > 0.1) {
-    float luma = dot(c, vec3(0.299, 0.587, 0.114));
-    float shadowMask = 1.0 - smoothstep(0.0, 0.4, luma);
-    float amount = uShadowTint / 100.0 * shadowMask * 0.5;
-    c.r += amount * 0.5;
-    c.g -= amount * 0.3;
-    c.b += amount * 0.5;
-  }
-
-  // Calibration saturation
-  if (uCalSat > 0.0) {
-    float luma = dot(c, vec3(0.299, 0.587, 0.114));
-    float satFactor = 1.0 + uCalSat / 100.0;
-    c = mix(vec3(luma), c, satFactor);
-  }
-
-  fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
-}
-`;
-
 // ─── Main pipeline ────────────────────────────────────────────────────
 
 export interface CurvePoint { 0: number; 1: number; }
@@ -623,13 +562,6 @@ export interface ColorGradingData {
   mode: 'saturation' | 'luminance';
 }
 
-export interface SplitToningData {
-  shadows_hue: number;
-  shadows_saturation: number;
-  highlights_hue: number;
-  highlights_saturation: number;
-  balance: number;
-}
 
 export interface GrainData {
   amount: number;
@@ -654,8 +586,6 @@ export interface WebGLPipelineState {
   hsl?: Record<string, HslRange>;
   /** Lightroom-style color grading. */
   colorGrading?: ColorGradingData;
-  /** Split Toning. */
-  splitToning?: SplitToningData;
   /** Film Grain. */
   grain?: GrainData;
   /** Dehaze (-100 to +100). */
@@ -667,11 +597,6 @@ export interface WebGLPipelineState {
     chromatic_aberration?: number;        // 0..100
     chromatic_aberration_x?: number;      // -1..1
     chromatic_aberration_y?: number;       // -1..1
-  };
-  /** Calibration (Camera Profile). */
-  calibration?: {
-    shadow_tint?: number;   // -100..+100
-    saturation?: number;    // 0..100
   };
   /** Vignette: 0..100 (0 = no vignette, 100 = strong). */
   vignette?: number;
@@ -692,6 +617,8 @@ export interface WebGLPipeline {
   setCurves(curves: CurveData): void;
   /** Upload HSL Color Mixer + Color Grading state. */
   setHsl(hslData: Record<string, HslRange>, colorGrading?: ColorGradingData): void;
+  /** Upload film-grain state. */
+  setGrain(grain: GrainData): void;
   /** Update render state. Called on every slider change. */
   updateState(state: Partial<WebGLPipelineState>): void;
   /** Render the pipeline to the canvas. No-op if init() returned false. */
@@ -725,10 +652,6 @@ export function createWebGLPipeline(): WebGLPipeline {
   let hslTex: WebGLTexture | null = null;
   // True when all HSL values are zero — skips the hsl pass.
   let hslIsFlat = true;
-
-  // Calibration (Camera Profile) program
-  let calibProg: WebGLProgram | null = null;
-  let calibIsFlat = true;
 
   // Pre-built identity LUT: lut[i] = i/255.
   const _identityLut = new Float32Array(256);
@@ -806,15 +729,6 @@ export function createWebGLPipeline(): WebGLPipeline {
       (cg.highlights_intensity ?? 0) !== 0 ||
       (cg.global_intensity ?? 0) !== 0
     )) return false;
-    // Split toning
-    const st = lastState.splitToning;
-    if (st && (
-      Math.abs(st.shadows_hue) > 1e-4 ||
-      Math.abs(st.shadows_saturation) > 1e-4 ||
-      Math.abs(st.highlights_hue) > 1e-4 ||
-      Math.abs(st.highlights_saturation) > 1e-4 ||
-      Math.abs(st.balance) > 1e-4
-    )) return false;
     // Grain
     const gr = lastState.grain;
     if (gr && Math.abs(gr.amount) > 1e-4) return false;
@@ -830,10 +744,6 @@ export function createWebGLPipeline(): WebGLPipeline {
     if (colorGrading) lastState.colorGrading = colorGrading;
   }
 
-  function setSplitToning(st: SplitToningData) {
-    if (!ready || !gl) return;
-    lastState.splitToning = st;
-  }
 
   function setGrain(gr: GrainData) {
     if (!ready || !gl) return;
@@ -893,7 +803,6 @@ export function createWebGLPipeline(): WebGLPipeline {
     curve: undefined,
     hsl: undefined,
     colorGrading: undefined,
-    splitToning: { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 },
     grain: { amount: 0, size: 25 },
     dehaze: 0,
   };
@@ -1023,7 +932,6 @@ export function createWebGLPipeline(): WebGLPipeline {
       curveProg = createProgram(VERT_SRC, CURVE_FRAG);
       lutOnlyProg = createProgram(VERT_SRC, LUT_ONLY_FRAG);
       hslProg = createProgram(VERT_SRC, HSL_FRAG);
-      calibProg = createProgram(VERT_SRC, CALIBRATION_FRAG);
 
       setupQuad();
       ready = true;
@@ -1404,13 +1312,6 @@ export function createWebGLPipeline(): WebGLPipeline {
           gl.uniform1i(gl.getUniformLocation(p, 'uCgMode'), 0);
         }
 
-        // Split Toning
-        const st = lastState.splitToning || { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 };
-        gl.uniform1f(gl.getUniformLocation(p, 'uStShadowsHue'), st.shadows_hue);
-        gl.uniform1f(gl.getUniformLocation(p, 'uStShadowsSat'), st.shadows_saturation);
-        gl.uniform1f(gl.getUniformLocation(p, 'uStHighlightsHue'), st.highlights_hue);
-        gl.uniform1f(gl.getUniformLocation(p, 'uStHighlightsSat'), st.highlights_saturation);
-        gl.uniform1f(gl.getUniformLocation(p, 'uStBalance'), st.balance);
 
         // Grain
         const gr = lastState.grain || { amount: 0, size: 25 };
@@ -1425,65 +1326,43 @@ export function createWebGLPipeline(): WebGLPipeline {
       }, null, w, h);
     }
 
-    // ── Pass: Calibration (Camera Profile) → canvas ─────────────────────
-    {
-      const calib = lastState.calibration || {};
-      const shadowTint = calib.shadow_tint || 0;
-      const calSat = calib.saturation || 0;
-      calibIsFlat = shadowTint === 0 && calSat === 0;
-      const calibRan = !calibIsFlat && calibProg;
-      if (calibRan) {
-        gl.activeTexture(gl.TEXTURE0);
-        // Source: whatever is currently on canvas (from HSL pass)
-        gl.bindTexture(gl.TEXTURE_2D, hslTex || curveTex || sourceTex);
-        runPass(calibProg, () => {
-          const p = calibProg!;
-          gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uShadowTint'), shadowTint);
-          gl.uniform1f(gl.getUniformLocation(p, 'uCalSat'), calSat);
-        }, null, w, h);
-      }
-
-      // ── Final blit: postCurveTex → canvas (only if no effect pass ran) ────
-      // The previous version ALWAYS ran this blit, which silently overwrote
-      // the HSL/ST/CG/grain/dehaze and calibration pass outputs. Dehaze (and
-      // any other pass-3-only effect) showed zero visual change because
-      // postCurveTex doesn't include those effects.
-      //
-      // Condition: only run if BOTH Pass 3 (hslProg) and the calibration pass
-      // were skipped. effectsRan covers the Pass 3 case; calibRan is computed
-      // above.
-      const effectsRan = !isEffectsFlat() && !!hslProg;
-      const needFinalBlit = !effectsRan && !calibRan;
-      if (needFinalBlit && postCurveTex && slidersLutProg) {
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
-        runPass(slidersLutProg!, () => {
-          const p = slidersLutProg!;
-          gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
-          // Force sliders uniforms to neutral so the blit is a straight copy.
-          gl.uniform1f(gl.getUniformLocation(p, 'uLutIntensity'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uExposure'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uContrast'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uBrightness'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uSaturation'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uTemp'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uTint'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uVignette'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uHighlights'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uShadows'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uWhites'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uBlacks'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uStraightenAngle'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uCropX'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uCropY'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uCropW'), 1);
-          gl.uniform1f(gl.getUniformLocation(p, 'uCropH'), 1);
-          gl.uniform1f(gl.getUniformLocation(p, 'uCAStrength'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uCAX'), 0);
-          gl.uniform1f(gl.getUniformLocation(p, 'uCAY'), 0);
-        }, null, w, h);
-      }
+    // ── Final blit: postCurveTex → canvas (only if no effect pass ran) ────
+    // The previous version ALWAYS ran this blit, which silently overwrote
+    // the HSL/CG/grain/dehaze pass output. Dehaze (and any other
+    // pass-3-only effect) showed zero visual change because postCurveTex
+    // doesn't include those effects.
+    //
+    // Condition: only run if the Pass 3 (hslProg) effect pass was skipped.
+    const effectsRan = !isEffectsFlat() && !!hslProg;
+    const needFinalBlit = !effectsRan;
+    if (needFinalBlit && postCurveTex && slidersLutProg) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
+      runPass(slidersLutProg!, () => {
+        const p = slidersLutProg!;
+        gl.uniform1i(gl.getUniformLocation(p, 'uSource'), 0);
+        // Force sliders uniforms to neutral so the blit is a straight copy.
+        gl.uniform1f(gl.getUniformLocation(p, 'uLutIntensity'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uExposure'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uContrast'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uBrightness'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uSaturation'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uTemp'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uTint'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uVignette'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uHighlights'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uShadows'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uWhites'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uBlacks'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uStraightenAngle'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uCropX'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uCropY'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uCropW'), 1);
+        gl.uniform1f(gl.getUniformLocation(p, 'uCropH'), 1);
+        gl.uniform1f(gl.getUniformLocation(p, 'uCAStrength'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uCAX'), 0);
+        gl.uniform1f(gl.getUniformLocation(p, 'uCAY'), 0);
+      }, null, w, h);
     }
 
     gl.bindVertexArray(null);
@@ -1511,15 +1390,13 @@ export function createWebGLPipeline(): WebGLPipeline {
     if (unsharpProg) gl.deleteProgram(unsharpProg);
     if (curveProg) gl.deleteProgram(curveProg);
     if (hslProg) gl.deleteProgram(hslProg);
-    if (calibProg) gl.deleteProgram(calibProg);
     quadVao = sourceTex = lutTex = sharpenTexA = sharpenTexB = curveTex = hslTex = null;
     sharpenFboA = sharpenFboB = curveFbo = hslFbo = null;
     curveTexR = curveTexG = curveTexB = null;
     slidersLutProg = blurHProg = blurVProg = unsharpProg = curveProg = hslProg = null;
-    calibIsFlat = true; calibProg = null;
     ready = false;
   }
 
-  return { init, setSource, setLut, setCurves, setHsl, setSplitToning, setGrain, updateState, render, destroy,
+  return { init, setSource, setLut, setCurves, setHsl, setGrain, updateState, render, destroy,
            get ready() { return ready; } };
 }

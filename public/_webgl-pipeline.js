@@ -299,12 +299,6 @@ uniform sampler2D uSource;
 // \u2500\u2500 Time for grain animation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 uniform float uTime;
 
-// \u2500\u2500 Split Toning \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-uniform float uStShadowsHue;
-uniform float uStShadowsSat;
-uniform float uStHighlightsHue;
-uniform float uStHighlightsSat;
-uniform float uStBalance;
 
 // \u2500\u2500 Grain \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 uniform float uGrainAmount;
@@ -444,26 +438,6 @@ void main() {
 
   c = applyColorGrading(c);
 
-  // \u2500\u2500 Split Toning \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-  if (uStShadowsSat > 0.0 || uStHighlightsSat > 0.0 || uStBalance != 0.0) {
-    float luma = dot(c, vec3(0.299, 0.587, 0.114));
-    float pivot = 0.35 + uStBalance * 0.003;
-    float hlRatio = smoothstep(pivot - 0.1, pivot + 0.1, luma);
-
-    float shH = fract(uStShadowsHue / 360.0);
-    float shS = uStShadowsSat / 100.0;
-    vec3 shadowTint = hsl2rgb(vec3(shH, shS, 0.5));
-
-    float hiH = fract(uStHighlightsHue / 360.0);
-    float hiS = uStHighlightsSat / 100.0;
-    vec3 highlightTint = hsl2rgb(vec3(hiH, hiS, 0.5));
-
-    vec3 tint = mix(shadowTint, highlightTint, hlRatio);
-    float avgSat = (uStShadowsSat + uStHighlightsSat) / 200.0;
-    float blend = avgSat * 0.5;
-    c = c + (tint - 0.5) * blend;
-  }
-
   // \u2500\u2500 Dehaze \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   if (uDehaze != 0.0) {
     float haze = min(c.r, min(c.g, c.b));
@@ -492,38 +466,6 @@ void main() {
   fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }
 `;
-const CALIBRATION_FRAG = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
-uniform sampler2D uSource;
-uniform float uShadowTint;  // -100..+100 (0=neutral)
-uniform float uCalSat;      // 0..100 extra saturation
-
-void main() {
-  vec3 c = texture(uSource, vUv).rgb;
-
-  // Shadow tint: shift hue in shadows only
-  if (abs(uShadowTint) > 0.1) {
-    float luma = dot(c, vec3(0.299, 0.587, 0.114));
-    float shadowMask = 1.0 - smoothstep(0.0, 0.4, luma);
-    float amount = uShadowTint / 100.0 * shadowMask * 0.5;
-    c.r += amount * 0.5;
-    c.g -= amount * 0.3;
-    c.b += amount * 0.5;
-  }
-
-  // Calibration saturation
-  if (uCalSat > 0.0) {
-    float luma = dot(c, vec3(0.299, 0.587, 0.114));
-    float satFactor = 1.0 + uCalSat / 100.0;
-    c = mix(vec3(luma), c, satFactor);
-  }
-
-  fragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
-}
-`;
 function createWebGLPipeline() {
   let curveTexR = null;
   let curveTexG = null;
@@ -539,8 +481,6 @@ function createWebGLPipeline() {
   let hslFbo = null;
   let hslTex = null;
   let hslIsFlat = true;
-  let calibProg = null;
-  let calibIsFlat = true;
   const _identityLut = new Float32Array(256);
   for (let i = 0; i < 256; i++) _identityLut[i] = i / 255;
   function _buildLut(ch) {
@@ -610,8 +550,6 @@ function createWebGLPipeline() {
     }
     const cg = lastState.colorGrading;
     if (cg && ((cg.shadows_intensity ?? 0) !== 0 || (cg.midtones_intensity ?? 0) !== 0 || (cg.highlights_intensity ?? 0) !== 0 || (cg.global_intensity ?? 0) !== 0)) return false;
-    const st = lastState.splitToning;
-    if (st && (Math.abs(st.shadows_hue) > 1e-4 || Math.abs(st.shadows_saturation) > 1e-4 || Math.abs(st.highlights_hue) > 1e-4 || Math.abs(st.highlights_saturation) > 1e-4 || Math.abs(st.balance) > 1e-4)) return false;
     const gr = lastState.grain;
     if (gr && Math.abs(gr.amount) > 1e-4) return false;
     if (lastState.dehaze && Math.abs(lastState.dehaze) > 1e-4) return false;
@@ -621,10 +559,6 @@ function createWebGLPipeline() {
     if (!ready || !gl) return;
     lastState.hsl = hslData;
     if (colorGrading) lastState.colorGrading = colorGrading;
-  }
-  function setSplitToning(st) {
-    if (!ready || !gl) return;
-    lastState.splitToning = st;
   }
   function setGrain(gr) {
     if (!ready || !gl) return;
@@ -700,7 +634,6 @@ function createWebGLPipeline() {
     curve: void 0,
     hsl: void 0,
     colorGrading: void 0,
-    splitToning: { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 },
     grain: { amount: 0, size: 25 },
     dehaze: 0
   };
@@ -827,7 +760,6 @@ function createWebGLPipeline() {
       curveProg = createProgram(VERT_SRC, CURVE_FRAG);
       lutOnlyProg = createProgram(VERT_SRC, LUT_ONLY_FRAG);
       hslProg = createProgram(VERT_SRC, HSL_FRAG);
-      calibProg = createProgram(VERT_SRC, CALIBRATION_FRAG);
       setupQuad();
       ready = true;
       return true;
@@ -1137,12 +1069,6 @@ function createWebGLPipeline() {
           gl.uniform1f(gl.getUniformLocation(p, "uCgGlobalIntensity"), 0);
           gl.uniform1i(gl.getUniformLocation(p, "uCgMode"), 0);
         }
-        const st = lastState.splitToning || { shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 };
-        gl.uniform1f(gl.getUniformLocation(p, "uStShadowsHue"), st.shadows_hue);
-        gl.uniform1f(gl.getUniformLocation(p, "uStShadowsSat"), st.shadows_saturation);
-        gl.uniform1f(gl.getUniformLocation(p, "uStHighlightsHue"), st.highlights_hue);
-        gl.uniform1f(gl.getUniformLocation(p, "uStHighlightsSat"), st.highlights_saturation);
-        gl.uniform1f(gl.getUniformLocation(p, "uStBalance"), st.balance);
         const gr = lastState.grain || { amount: 0, size: 25 };
         gl.uniform1f(gl.getUniformLocation(p, "uGrainAmount"), gr.amount);
         gl.uniform1f(gl.getUniformLocation(p, "uGrainSize"), gr.size);
@@ -1150,52 +1076,35 @@ function createWebGLPipeline() {
         gl.uniform1f(gl.getUniformLocation(p, "uTime"), performance.now() / 1e3);
       }, null, w, h);
     }
-    {
-      const calib = lastState.calibration || {};
-      const shadowTint = calib.shadow_tint || 0;
-      const calSat = calib.saturation || 0;
-      calibIsFlat = shadowTint === 0 && calSat === 0;
-      const calibRan = !calibIsFlat && calibProg;
-      if (calibRan) {
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, hslTex || curveTex || sourceTex);
-        runPass(calibProg, () => {
-          const p = calibProg;
-          gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uShadowTint"), shadowTint);
-          gl.uniform1f(gl.getUniformLocation(p, "uCalSat"), calSat);
-        }, null, w, h);
-      }
-      const effectsRan = !isEffectsFlat() && !!hslProg;
-      const needFinalBlit = !effectsRan && !calibRan;
-      if (needFinalBlit && postCurveTex && slidersLutProg) {
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
-        runPass(slidersLutProg, () => {
-          const p = slidersLutProg;
-          gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uLutIntensity"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uExposure"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uContrast"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uBrightness"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uSaturation"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uTemp"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uTint"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uVignette"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uHighlights"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uShadows"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uWhites"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uBlacks"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uStraightenAngle"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uCropX"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uCropY"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uCropW"), 1);
-          gl.uniform1f(gl.getUniformLocation(p, "uCropH"), 1);
-          gl.uniform1f(gl.getUniformLocation(p, "uCAStrength"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uCAX"), 0);
-          gl.uniform1f(gl.getUniformLocation(p, "uCAY"), 0);
-        }, null, w, h);
-      }
+    const effectsRan = !isEffectsFlat() && !!hslProg;
+    const needFinalBlit = !effectsRan;
+    if (needFinalBlit && postCurveTex && slidersLutProg) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, postCurveTex);
+      runPass(slidersLutProg, () => {
+        const p = slidersLutProg;
+        gl.uniform1i(gl.getUniformLocation(p, "uSource"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uLutIntensity"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uExposure"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uContrast"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uBrightness"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uSaturation"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uTemp"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uTint"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uVignette"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uHighlights"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uShadows"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uWhites"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uBlacks"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uStraightenAngle"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uCropX"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uCropY"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uCropW"), 1);
+        gl.uniform1f(gl.getUniformLocation(p, "uCropH"), 1);
+        gl.uniform1f(gl.getUniformLocation(p, "uCAStrength"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uCAX"), 0);
+        gl.uniform1f(gl.getUniformLocation(p, "uCAY"), 0);
+      }, null, w, h);
     }
     gl.bindVertexArray(null);
   }
@@ -1221,13 +1130,10 @@ function createWebGLPipeline() {
     if (unsharpProg) gl.deleteProgram(unsharpProg);
     if (curveProg) gl.deleteProgram(curveProg);
     if (hslProg) gl.deleteProgram(hslProg);
-    if (calibProg) gl.deleteProgram(calibProg);
     quadVao = sourceTex = lutTex = sharpenTexA = sharpenTexB = curveTex = hslTex = null;
     sharpenFboA = sharpenFboB = curveFbo = hslFbo = null;
     curveTexR = curveTexG = curveTexB = null;
     slidersLutProg = blurHProg = blurVProg = unsharpProg = curveProg = hslProg = null;
-    calibIsFlat = true;
-    calibProg = null;
     ready = false;
   }
   return {
@@ -1236,7 +1142,6 @@ function createWebGLPipeline() {
     setLut,
     setCurves,
     setHsl,
-    setSplitToning,
     setGrain,
     updateState,
     render,

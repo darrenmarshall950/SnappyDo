@@ -727,6 +727,31 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
 
     /* ── Tone Curve ───────────────────────────────── */
     .panel-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+
+  /* ── Collapsible tool groups ───────────────────────────────────────────
+     The editor panel used to be one long column of always-open sections
+     (2.5 screens of scrolling). The controls are now grouped into five
+     collapsible sections so the panel fits roughly one screen. "Essentials"
+     is open by default; the rest start closed. */
+  .tool-group { border:1px solid #262626; border-radius:7px; margin-bottom:6px; background:#111; }
+  .tool-group > summary {
+    list-style:none; cursor:pointer; padding:7px 10px;
+    display:flex; justify-content:space-between; align-items:center;
+    font-size:0.78rem; font-weight:600; color:#e8e8e8; user-select:none;
+  }
+  .tool-group > summary::-webkit-details-marker { display:none; }
+  .tool-group > summary::after {
+    content:'\2304'; font-size:0.9rem; color:#666; transition:transform .12s ease;
+  }
+  .tool-group[open] > summary::after { transform:rotate(180deg); }
+  .tool-group > summary:hover { background:#171717; }
+  .tool-group > summary:focus-visible { outline:1px solid #4a9eff; outline-offset:-1px; }
+  .tool-group__body { padding:2px 10px 10px; border-top:1px solid #1e1e1e; }
+  .tool-group__badge {
+    font-size:0.66rem; color:#888; font-weight:400; margin-left:auto; margin-right:0.5rem;
+  }
+  .tool-group__body .panel-section { border:0; padding:6px 0 2px; margin:0; }
+  .tool-group__body .panel-section:last-child { padding-bottom:0; }
     .channel-tabs { display:flex; gap:3px; }
     .ch-tab { padding:2px 7px; border:1px solid #444; border-radius:3px; background:#222; color:#888; cursor:pointer; font-size:11px; }
     .ch-tab.active { background:#4af; color:#111; border-color:#4af; font-weight:600; }
@@ -737,10 +762,16 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
     .btn-sm { padding:2px 9px; font-size:11px; }
 
     /* ── Color Grading ─────────────────────────────── */
-    .cg-details { margin-bottom: 6px; }
     .cg-details summary { cursor: pointer; padding: 4px 0; font-size: 12px; color: #aaa; }
     .cg-details summary:hover { color: #fafafa; }
-    .cg-hsl-grid { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+    /* Sub-headings inside the Colour group (replaces the nested <details>) */
+  .cg-subhead {
+    font-size:0.72rem; font-weight:600; color:#bbb; text-transform:uppercase;
+    letter-spacing:0.04em; margin:10px 0 4px; padding-bottom:3px;
+    border-bottom:1px solid #1e1e1e;
+  }
+  .cg-subhead:first-of-type { margin-top:2px; }
+  .cg-hsl-grid { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
     .cg-hsl-row {
       display: grid;
       grid-template-columns: 14px 60px 80px 1fr 24px 24px;
@@ -829,10 +860,6 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
       stroke: rgba(0,0,0,0.4); stroke-width: 1; fill: none;
       pointer-events: none;
     }
-    .cw-row {
-      display: flex; align-items: center; gap: 10px;
-      margin: 6px 0;
-    }
     .cw-row .cw-label {
       min-width: 80px; font-size: 11px; color: #aaa;
     }
@@ -841,12 +868,10 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
     .cg-global-section { display: flex; gap: 8px; margin-top: 6px; }
     .cg-global-section .cg-wheel-group { flex-direction: row; align-items: center; }
 
-    /* ── Effects (Split Toning, Grain) ──────────────────── */
+    /* ── Effects (Grain) ───────────────────────────────────────── */
     .fx-details { margin-bottom: 6px; }
     .fx-details summary { cursor: pointer; padding: 4px 0; font-size: 12px; color: #aaa; }
     .fx-details summary:hover { color: #fafafa; }
-    .st-section { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
-    .st-subhead { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
 
     </style>
   </head>
@@ -890,6 +915,9 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
       </div>
 
       <aside class="panel">
+      <details class="tool-group" id="group-essentials" open>
+        <summary>Essentials<span class="tool-group__badge">LUT, light &amp; colour</span></summary>
+        <div class="tool-group__body">
         <section class="panel-section" id="section-presets">
           <h3>Presets</h3>
           <div class="preset-row">
@@ -907,14 +935,12 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           <select id="lut-select" class="select select--block">
             <option value="">No LUT</option>
           </select>
-          <p class="hint">Built-in looks available to all accounts. Saved LUTs can be deleted from the LUTs panel — saving/loading complete look-and-feel combinations is handled by <strong>Presets</strong> above (captures sliders, wheels, and tone curve).</p>
-        </section>
           <div class="slider" data-key="lut_intensity" id="slider-lut-intensity">
             <label>Intensity</label>
             <input type="range" min="0" max="100" step="1" />
             <span class="val">0</span>
           </div>
-          <p class="hint">Built-in looks available to all accounts. Use "Save LUT" to bake current sliders into a new LUT. Saved LUTs restore their sliders on load.</p>
+          <p class="hint">Built-in looks available to all accounts. Saved LUTs can be deleted from the LUTs panel — saving/loading complete look-and-feel combinations is handled by <strong>Presets</strong> above (captures sliders, wheels, and tone curve).</p>
         </section>
 
         <section class="panel-section">
@@ -936,6 +962,31 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           </div>
         </section>
 
+        <section class="panel-section">
+          <h3>Color <button id="btn-reset-color">reset</button></h3>
+          <div class="slider" data-key="saturation">
+            <label>Saturation</label>
+            <input type="range" min="-100" max="100" step="1" />
+            <span class="val">0</span>
+          </div>
+          <div class="slider color-wb" data-key="temp">
+            <label>Temperature</label>
+            <input type="range" min="-200" max="200" step="1" />
+            <span class="val">0</span>
+          </div>
+          <div class="slider color-wb" data-key="tint">
+            <label>Tint</label>
+            <input type="range" min="-200" max="200" step="1" />
+            <span class="val">0</span>
+          </div>
+        </section>
+        </div>
+      </details>
+
+
+      <details class="tool-group" id="group-tone">
+        <summary>Tone &amp; Curve<span class="tool-group__badge">highlights, curve, effects</span></summary>
+        <div class="tool-group__body">
         <section class="panel-section">
           <h3>Tone <button id="btn-reset-tone">reset</button></h3>
           <div class="slider" data-key="highlights">
@@ -960,26 +1011,6 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           </div>
         </section>
 
-        <section class="panel-section">
-          <h3>Color <button id="btn-reset-color">reset</button></h3>
-          <div class="slider" data-key="saturation">
-            <label>Saturation</label>
-            <input type="range" min="-100" max="100" step="1" />
-            <span class="val">0</span>
-          </div>
-          <div class="slider color-wb" data-key="temp">
-            <label>Temperature</label>
-            <input type="range" min="-200" max="200" step="1" />
-            <span class="val">0</span>
-          </div>
-          <div class="slider color-wb" data-key="tint">
-            <label>Tint</label>
-            <input type="range" min="-200" max="200" step="1" />
-            <span class="val">0</span>
-          </div>
-        </section>
-
-        <!-- ── Tone Curve ─────────────────────────────────────── -->
         <section class="panel-section" id="section-curve">
           <h3 class="panel-heading">
             Tone Curve
@@ -1031,46 +1062,6 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           </div>
 
           <details class="fx-details">
-            <summary>Split Toning</summary>
-            <div class="st-section">
-              <div class="cw-row">
-                <div>
-                  <div class="st-subhead">Shadows</div>
-                  <div class="cw" id="cw-st-shadows" data-st-hue="st_shadows_hue" data-st-sat="st_shadows_saturation" style="margin: 4px auto;">
-                    <div class="cw-ring"></div>
-                    <div class="cw-mask"></div>
-                    <svg class="cw-svg" viewBox="-50 -50 100 100">
-                      <circle class="cw-pointer" cx="0" cy="0" r="4.5" />
-                    </svg>
-                  </div>
-                </div>
-                <div>
-                  <div class="st-subhead">Highlights</div>
-                  <div class="cw" id="cw-st-highlights" data-st-hue="st_highlights_hue" data-st-sat="st_highlights_saturation" style="margin: 4px auto;">
-                    <div class="cw-ring"></div>
-                    <div class="cw-mask"></div>
-                    <svg class="cw-svg" viewBox="-50 -50 100 100">
-                      <circle class="cw-pointer" cx="0" cy="0" r="4.5" />
-                    </svg>
-                  </div>
-                </div>
-              </div>
-              <div class="slider" data-key="st_balance">
-                <label>Balance</label>
-                <input type="range" min="-100" max="100" step="1" />
-                <span class="val">0</span>
-              </div>
-              <!-- Hidden sliders kept for keyboard accessibility / preset compat -->
-              <div style="display:none">
-                <div class="slider" data-key="st_shadows_hue"><input type="range" min="0" max="360" /><span class="val">0</span></div>
-                <div class="slider" data-key="st_shadows_saturation"><input type="range" min="0" max="100" /><span class="val">0</span></div>
-                <div class="slider" data-key="st_highlights_hue"><input type="range" min="0" max="360" /><span class="val">0</span></div>
-                <div class="slider" data-key="st_highlights_saturation"><input type="range" min="0" max="100" /><span class="val">0</span></div>
-              </div>
-            </div>
-          </details>
-
-          <details class="fx-details">
             <summary>Grain</summary>
             <div class="slider" data-key="grain_amount">
               <label>Amount</label>
@@ -1084,86 +1075,17 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
             </div>
           </details>
         </section>
-
-        <section class="panel-section" id="section-spot-removal">
-          <h3>Spot Removal <button id="btn-reset-spot" class="btn-ghost">reset all</button></h3>
-          <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem;align-items:center">
-            <button class="btn btn-sm" id="btn-spot-add-clone">+ Clone</button>
-            <button class="btn btn-sm" id="btn-spot-add-heal">+ Heal</button>
-            <span id="spot-mode-label" style="font-size:0.7rem;color:#888;margin-left:0.3rem">Click canvas to add spot</span>
-          </div>
-          <div id="spot-list" style="max-height:120px;overflow-y:auto;font-size:0.72rem;display:flex;flex-direction:column;gap:2px"></div>
-          <canvas id="spot-overlay-canvas" style="position:absolute;pointer-events:none;top:0;left:0;width:100%;height:100%"></canvas>
-        </section>
-
-        {isRaw && (
-          <section class="panel-section" id="section-raw">
-            <h3>RAW <button id="btn-reset-raw">reset</button></h3>
-            <div class="raw-note">Live preview uses the cached JPEG approximation. Full RAW render on Save (via darktable-cli).</div>
-
-            <div class="raw-subhead">White Balance</div>
-            <div class="slider" data-key="raw_wb_kelvin">
-              <label>Kelvin</label>
-              <input type="range" min="2000" max="10000" step="50" />
-              <span class="val">5500</span>
-            </div>
-            <div class="slider" data-key="raw_wb_tint">
-              <label>Tint (M/G)</label>
-              <input type="range" min="-100" max="100" step="1" />
-              <span class="val">0</span>
-            </div>
-
-            <div class="raw-subhead">Noise Reduction</div>
-            <div class="slider" data-key="raw_nr_lum">
-              <label>Luminance</label>
-              <input type="range" min="0" max="100" step="1" />
-              <span class="val">0</span>
-            </div>
-            <div class="slider" data-key="raw_nr_chroma">
-              <label>Chroma</label>
-              <input type="range" min="0" max="100" step="1" />
-              <span class="val">0</span>
-            </div>
-
-            <div class="raw-subhead">Lens</div>
-            <div class="checkbox-row">
-              <input type="checkbox" id="raw-lens-on" />
-              <label for="raw-lens-on">Auto lens corrections</label>
-              <span id="lens-corrections-badge" class="lens-badge" style="display:none">LENS ON</span>
-            </div>
-
-            <details class="fx-details" style="margin-top:0.5rem">
-              <summary>Lens Corrections</summary>
-              <div class="slider" data-key="lens_corrections.remove_baseline_exposure">
-                <label>Baseline Exposure</label>
-                <input type="range" min="-5" max="5" step="0.1" />
-                <span class="val">0</span>
-              </div>
-              <div class="slider" data-key="lens_corrections.chromatic_aberration">
-                <label>Chromatic Aberration</label>
-                <input type="range" min="0" max="100" step="1" />
-                <span class="val">0</span>
-              </div>
-              <div class="slider" data-key="lens_corrections.chromatic_aberration_x">
-                <label>CA X</label>
-                <input type="range" min="-1" max="1" step="0.05" />
-                <span class="val">0</span>
-              </div>
-              <div class="slider" data-key="lens_corrections.chromatic_aberration_y">
-                <label>CA Y</label>
-                <input type="range" min="-1" max="1" step="0.05" />
-                <span class="val">0</span>
-              </div>
-            </details>
-          </section>
-        )}
+        </div>
+      </details>
 
 
+      <details class="tool-group" id="group-colour">
+        <summary>Colour<span class="tool-group__badge">grading &amp; hue mixer</span></summary>
+        <div class="tool-group__body">
         <section class="panel-section" id="section-color-grading">
           <h3>Color Grading <button id="btn-reset-cg">reset</button></h3>
 
-          <details class="cg-details">
-            <summary>HSL Mixer</summary>
+          <div class="cg-subhead">Hue Mixer</div>
             <div class="cg-hsl-grid">
               <div class="cg-hsl-row hidden-hs" data-range="red">
                 <span class="cg-swatch" style="background:#ff0000"></span>
@@ -1306,10 +1228,8 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 <span class="cg-chan-label">L</span><span class="cg-chan-label">HS</span>
               </div>
             </div>
-          </details>
 
-          <details class="cg-details">
-            <summary>Color Grading</summary>
+          <div class="cg-subhead">Tone Grading</div>
             <div class="cg-grading-section">
               <div class="cg-wheel-row">
                 <div class="cg-wheel-group">
@@ -1363,10 +1283,8 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 </select>
               </div>
             </div>
-          </details>
 
-          <details class="cg-details">
-            <summary>Global</summary>
+          <div class="cg-subhead">Global</div>
             <div class="cg-global-section">
               <div class="cg-wheel-group">
                 <div class="cw" id="cw-cg-global-colour" data-state-key="cg_global_colour">
@@ -1382,43 +1300,14 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
                 </div>
               </div>
             </div>
-          </details>
         </section>
-
-        <section class="panel-section" id="section-calibration">
-          <h3>Calibration <button id="btn-reset-calibration" class="btn-ghost">reset</button></h3>
-          <div class="slider" data-key="calibration.shadow_tint">
-            <label>Shadow Tint</label>
-            <input type="range" min="-100" max="100" step="1" />
-            <span class="val">0</span>
-          </div>
-          <div class="slider" data-key="calibration.saturation">
-            <label>Saturation</label>
-            <input type="range" min="0" max="100" step="1" />
-            <span class="val">0</span>
-          </div>
-        </section>
+        </div>
+      </details>
 
 
-        <section class="panel-section" id="section-snapshots">
-          <h3>Snapshots <button id="btn-snapshot-save" class="btn btn-sm">Save Current</button></h3>
-          <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem;align-items:center">
-            <input type="text" id="snapshot-name-input" placeholder="Snapshot name..." style="flex:1;background:#1a1a1a;border:1px solid #333;color:#fafafa;border-radius:5px;padding:0.3rem 0.5rem;font-size:0.75rem" />
-          </div>
-          <div id="snapshot-list" style="max-height:140px;overflow-y:auto;font-size:0.72rem;display:flex;flex-direction:column;gap:2px"></div>
-        </section>
-
-        <section class="panel-section" id="section-history">
-          <h3>
-            History
-            <div style="display:flex;gap:4px">
-              <button class="btn" id="btn-history-undo" title="Undo (Ctrl+Z)" disabled>&#x21A9 Undo</button>
-              <button class="btn" id="btn-history-redo" title="Redo (Ctrl+Shift+Z)" disabled>&#x21AA Redo</button>
-            </div>
-          </h3>
-          <div id="history-list" style="max-height:160px;overflow-y:auto;font-size:0.75rem;display:flex;flex-direction:column;gap:1px"></div>
-        </section>
-
+      <details class="tool-group" id="group-tools">
+        <summary>Tools<span class="tool-group__badge">crop, spot removal, history</span></summary>
+        <div class="tool-group__body">
         <section class="panel-section">
           <h3>Crop</h3>
           <div class="crop-buttons">
@@ -1440,6 +1329,85 @@ const rawPreviewEnabled = process.env.SNAPPYDO_RAW_PREVIEW_RENDER === '1';
           </div>
           <div id="crop-dims" style="font-size:0.7rem;color:#888;margin-top:0.3rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"></div>
         </section>
+
+        <section class="panel-section" id="section-spot-removal">
+          <h3>Spot Removal <button id="btn-reset-spot" class="btn-ghost">reset all</button></h3>
+          <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem;align-items:center">
+            <button class="btn btn-sm" id="btn-spot-add-clone">+ Clone</button>
+            <button class="btn btn-sm" id="btn-spot-add-heal">+ Heal</button>
+            <span id="spot-mode-label" style="font-size:0.7rem;color:#888;margin-left:0.3rem">Click canvas to add spot</span>
+          </div>
+          <div id="spot-list" style="max-height:120px;overflow-y:auto;font-size:0.72rem;display:flex;flex-direction:column;gap:2px"></div>
+          <canvas id="spot-overlay-canvas" style="position:absolute;pointer-events:none;top:0;left:0;width:100%;height:100%"></canvas>
+        </section>
+
+        <section class="panel-section" id="section-snapshots">
+          <h3>Snapshots <button id="btn-snapshot-save" class="btn btn-sm">Save Current</button></h3>
+          <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem;align-items:center">
+            <input type="text" id="snapshot-name-input" placeholder="Snapshot name..." style="flex:1;background:#1a1a1a;border:1px solid #333;color:#fafafa;border-radius:5px;padding:0.3rem 0.5rem;font-size:0.75rem" />
+          </div>
+          <div id="snapshot-list" style="max-height:140px;overflow-y:auto;font-size:0.72rem;display:flex;flex-direction:column;gap:2px"></div>
+        </section>
+
+        <section class="panel-section" id="section-history">
+          <h3>
+            History
+            <div style="display:flex;gap:4px">
+              <button class="btn" id="btn-history-undo" title="Undo (Ctrl+Z)" disabled>&#x21A9 Undo</button>
+              <button class="btn" id="btn-history-redo" title="Redo (Ctrl+Shift+Z)" disabled>&#x21AA Redo</button>
+            </div>
+          </h3>
+          <div id="history-list" style="max-height:160px;overflow-y:auto;font-size:0.75rem;display:flex;flex-direction:column;gap:1px"></div>
+        </section>
+        </div>
+      </details>
+
+
+      {isRaw && (
+      <details class="tool-group" id="group-raw">
+        <summary>RAW<span class="tool-group__badge">white balance &amp; noise</span></summary>
+        <div class="tool-group__body">
+          <section class="panel-section" id="section-raw">
+            <h3>RAW <button id="btn-reset-raw">reset</button></h3>
+            <div class="raw-note">Live preview uses the cached JPEG approximation. Full RAW render on Save (via darktable-cli).</div>
+
+            <div class="raw-subhead">White Balance</div>
+            <div class="slider" data-key="raw_wb_kelvin">
+              <label>Kelvin</label>
+              <input type="range" min="2000" max="10000" step="50" />
+              <span class="val">5500</span>
+            </div>
+            <div class="slider" data-key="raw_wb_tint">
+              <label>Tint (M/G)</label>
+              <input type="range" min="-100" max="100" step="1" />
+              <span class="val">0</span>
+            </div>
+
+            <div class="raw-subhead">Noise Reduction</div>
+            <div class="slider" data-key="raw_nr_lum">
+              <label>Luminance</label>
+              <input type="range" min="0" max="100" step="1" />
+              <span class="val">0</span>
+            </div>
+            <div class="slider" data-key="raw_nr_chroma">
+              <label>Chroma</label>
+              <input type="range" min="0" max="100" step="1" />
+              <span class="val">0</span>
+            </div>
+
+            <div class="raw-subhead">Lens</div>
+            <div class="checkbox-row">
+              <input type="checkbox" id="raw-lens-on" />
+              <label for="raw-lens-on">Auto lens corrections</label>
+              <span id="lens-corrections-badge" class="lens-badge" style="display:none">LENS ON</span>
+            </div>
+
+          </section>
+        </div>
+      </details>
+
+      )}
+
 
         <div class="status" id="status">Ready.</div>
         {(exif.camera || exif.lens || exif.iso || exif.aperture || exif.shutter || exif.focalLength || exif.takenAt) && (
