@@ -136,9 +136,14 @@ export function applyColorGradingToRgb(
 
   const applyTint = (mask: number, intensity: number, colour: number[], amount: number) => {
     if (intensity <= 0 || amount <= 0) return;
-    const dr = (colour[0] ?? 0) / 255 - 0.5;
-    const dg = (colour[1] ?? 0) / 255 - 0.5;
-    const db = (colour[2] ?? 0) / 255 - 0.5;
+    // The colour is 0..255 but the tint offsets are expressed in 0..1 units
+    // (colour/255 - 0.5, so a neutral 128 gives ~0). The offsets must be
+    // scaled into the 0..255 pixel range, exactly like the global branch
+    // below does with its 127.5 factor. Without this the tint was ~255x
+    // too small and the shadows/midtones/highlights wheels did nothing.
+    const dr = ((colour[0] ?? 0) / 255 - 0.5) * 127.5;
+    const dg = ((colour[1] ?? 0) / 255 - 0.5) * 127.5;
+    const db = ((colour[2] ?? 0) / 255 - 0.5) * 127.5;
     rOut += dr * mask * intensity * amount;
     gOut += dg * mask * intensity * amount;
     bOut += db * mask * intensity * amount;

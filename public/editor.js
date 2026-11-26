@@ -64,16 +64,159 @@
     "_appliedCrop",
     "_appliedLut"
   ]);
-  function clone(value) {
-    return JSON.parse(JSON.stringify(value));
+  function clone2(value) {
+    const json = JSON.stringify(value);
+    return json === void 0 ? void 0 : JSON.parse(json);
   }
   function buildRenderRecipe(state2, curve) {
     const params = {};
     for (const [key, value] of Object.entries(state2 || {})) {
-      if (!UI_ONLY_KEYS.has(key) && value !== void 0) params[key] = clone(value);
+      if (!UI_ONLY_KEYS.has(key) && value !== void 0) params[key] = clone2(value);
     }
-    params.curve = clone(curve);
+    if (curve !== void 0) params.curve = clone2(curve);
     return { version: 1, params };
+  }
+
+  // src/lib/effects.ts
+  function isGrainFlat(g) {
+    if (!g) return true;
+    return Math.abs(g.amount) < 1e-4;
+  }
+  function applyGrainToRgb(r, g, b, grain, x, y, timeMs) {
+    if (isGrainFlat(grain)) return [r, g, b];
+    const { amount, size } = grain;
+    const amountNorm = amount / 100;
+    const seed = x * 374761393 + y * 668265263 + timeMs * 2246822519;
+    let n = (seed ^ seed >> 13) * 1274126177;
+    n = n ^ n >> 16;
+    const random = (n & 2147483647) / 2147483647 - 0.5;
+    const luma = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+    const grainWeight = 0.3 + luma * 0.7;
+    const sizeScale = 1 + size / 100 * 2;
+    const grainAmount = random * amountNorm * 2 * grainWeight * sizeScale;
+    return [
+      Math.max(0, Math.min(255, r + grainAmount)),
+      Math.max(0, Math.min(255, g + grainAmount)),
+      Math.max(0, Math.min(255, b + grainAmount))
+    ];
+  }
+
+  // src/lib/hsl.ts
+  function rgb2hsl(r, g, b) {
+    const rn = r / 255, gn = g / 255, bn = b / 255;
+    const mx = Math.max(rn, gn, bn);
+    const mn = Math.min(rn, gn, bn);
+    const l = (mx + mn) / 2;
+    let s = 0, h = 0;
+    if (mx !== mn) {
+      const d = mx - mn;
+      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+      if (mx === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+      else if (mx === gn) h = ((bn - rn) / d + 2) / 6;
+      else h = ((rn - gn) / d + 4) / 6;
+    }
+    return [h, s, l];
+  }
+  function hueDist(h1, h2) {
+    const d = Math.abs(h2 - h1);
+    return d > 0.5 ? 1 - d : d;
+  }
+  function hsl2rgb(h, s, l) {
+    if (s < 1e-5) return [Math.round(l * 255), Math.round(l * 255), Math.round(l * 255)];
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const norm = (v) => {
+      if (v < 0) v += 1;
+      if (v > 1) v -= 1;
+      if (v < 1 / 6) return p + (q - p) * 6 * v;
+      if (v < 0.5) return q;
+      if (v < 2 / 3) return p + (q - p) * (2 / 3 - v) * 6;
+      return p;
+    };
+    const r = norm(h + 1 / 3);
+    const g = norm(h);
+    const b = norm(h - 1 / 3);
+    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+  }
+  var RANGE_CENTERS = [
+    ["red", 0 / 8],
+    ["orange", 1 / 8],
+    ["yellow", 2 / 8],
+    ["green", 3 / 8],
+    ["aqua", 4 / 8],
+    ["blue", 5 / 8],
+    ["purple", 6 / 8],
+    ["magenta", 7 / 8]
+  ];
+  function isHslFlat(hslData) {
+    if (!hslData) return true;
+    for (const key of Object.keys(hslData)) {
+      const r = hslData[key];
+      if (Math.abs(r.h) > 1e-4 || Math.abs(r.s) > 1e-4 || Math.abs(r.l) > 1e-4) return false;
+    }
+    return true;
+  }
+  function applyHslToRgb(r, g, b, hslData) {
+    if (isHslFlat(hslData)) return [r, g, b];
+    let [h, s, l] = rgb2hsl(r, g, b);
+    const RANGE = 0.125;
+    for (const [name, centerH] of RANGE_CENTERS) {
+      const key = "hsl_" + name;
+      const range = hslData[key];
+      if (!range) continue;
+      const dH = range.h / 100;
+      const dS = range.s / 100;
+      const dL = range.l / 100;
+      if (Math.abs(dH) < 1e-5 && Math.abs(dS) < 1e-5 && Math.abs(dL) < 1e-5) continue;
+      const d = hueDist(h, centerH);
+      const w = 1 - Math.max(0, Math.min(1, (d - 0) / RANGE));
+      h = (h + dH * w) % 1;
+      if (h < 0) h += 1;
+      s = Math.max(0, Math.min(1, s + dS * w));
+      l = Math.max(0, Math.min(1, l + dL * w));
+    }
+    return hsl2rgb(h, s, l);
+  }
+  function luminance(r, g, b) {
+    return (r * 2126 + g * 7152 + b * 722) / 1e4 / 255;
+  }
+  function applyColorGradingToRgb(r, g, b, cg) {
+    const lum = luminance(r, g, b);
+    const shI = cg.shadows_intensity / 100;
+    const miI = cg.midtones_intensity / 100;
+    const hiI = cg.highlights_intensity / 100;
+    const glI = cg.global_intensity / 100;
+    if (shI <= 0 && miI <= 0 && hiI <= 0 && glI <= 0) return [r, g, b];
+    const shadowsMask = 1 - Math.max(0, Math.min(1, lum / 0.35));
+    const highlightsMask = Math.max(0, Math.min(1, (lum - 0.65) / 0.35));
+    const midtonesMask = Math.max(0, Math.min(1, 1 - shadowsMask - highlightsMask));
+    const sc = cg.shadows_colour;
+    const mc = cg.midtones_colour;
+    const hc = cg.highlights_colour;
+    const gc = cg.global_colour;
+    let rOut = r, gOut = g, bOut = b;
+    const applyTint = (mask, intensity, colour, amount) => {
+      if (intensity <= 0 || amount <= 0) return;
+      const dr = ((colour[0] ?? 0) / 255 - 0.5) * 127.5;
+      const dg = ((colour[1] ?? 0) / 255 - 0.5) * 127.5;
+      const db = ((colour[2] ?? 0) / 255 - 0.5) * 127.5;
+      rOut += dr * mask * intensity * amount;
+      gOut += dg * mask * intensity * amount;
+      bOut += db * mask * intensity * amount;
+    };
+    applyTint(shadowsMask, shI, sc, 1);
+    applyTint(midtonesMask, miI, mc, 1);
+    applyTint(highlightsMask, hiI, hc, 1);
+    if (glI > 0 && gc) {
+      rOut += (gc[0] ?? 0) / 255 * glI * 127.5;
+      gOut += (gc[1] ?? 0) / 255 * glI * 127.5;
+      bOut += (gc[2] ?? 0) / 255 * glI * 127.5;
+    }
+    return [
+      Math.max(0, Math.min(255, Math.round(rOut))),
+      Math.max(0, Math.min(255, Math.round(gOut))),
+      Math.max(0, Math.min(255, Math.round(bOut)))
+    ];
   }
 
   // src/lib/editor.ts
@@ -702,6 +845,46 @@
       ctx.rect(cx, cy, cw, ch);
       ctx.clip();
     }
+    const hslDataForPreview = {};
+    for (const range of ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"]) {
+      const key = "hsl_" + range;
+      const v = state[key];
+      hslDataForPreview[key] = v && typeof v === "object" ? { h: v.h ?? 0, s: v.s ?? 0, l: v.l ?? 0 } : { h: 0, s: 0, l: 0 };
+    }
+    const cgParamsForPreview = {
+      shadows_colour: state.cg_shadows_colour ?? [128, 128, 128],
+      midtones_colour: state.cg_midtones_colour ?? [128, 128, 128],
+      highlights_colour: state.cg_highlights_colour ?? [128, 128, 128],
+      global_colour: state.cg_global_colour ?? [128, 128, 128],
+      shadows_intensity: state.cg_shadows_intensity ?? 0,
+      midtones_intensity: state.cg_midtones_intensity ?? 0,
+      highlights_intensity: state.cg_highlights_intensity ?? 0,
+      global_intensity: state.cg_global_intensity ?? 0,
+      mode: state.cg_mode ?? "saturation"
+    };
+    const grainParams = {
+      amount: state.grain_amount ?? 0,
+      size: state.grain_size ?? 25
+    };
+    const hasHslWork = !isHslFlat(hslDataForPreview);
+    const hasCgWork = cgParamsForPreview.shadows_intensity > 0 || cgParamsForPreview.midtones_intensity > 0 || cgParamsForPreview.highlights_intensity > 0 || cgParamsForPreview.global_intensity > 0;
+    const hasGrainWork = grainParams.amount > 0;
+    const applyHslWork = (data) => {
+      for (let i = 0; i < data.length; i += 4) {
+        const [r, g, b] = applyHslToRgb(data[i], data[i + 1], data[i + 2], hslDataForPreview);
+        data[i] = r;
+        data[i + 1] = g;
+        data[i + 2] = b;
+      }
+    };
+    const applyCgWork = (data) => {
+      for (let i = 0; i < data.length; i += 4) {
+        const [r, g, b] = applyColorGradingToRgb(data[i], data[i + 1], data[i + 2], cgParamsForPreview);
+        data[i] = r;
+        data[i + 1] = g;
+        data[i + 2] = b;
+      }
+    };
     const hasSliderWork = isIOS && (state.exposure !== 0 || state.contrast !== 0 || state.brightness !== 0 || state.saturation !== 0 || previewTemp !== 0 || previewTint !== 0 || state.highlights !== 0 || state.shadows !== 0 || state.whites !== 0 || state.blacks !== 0);
     const hasSharpen = state.sharpen > 0;
     const hasLut = !!(activeLut && state.lut_id && state.lut_intensity > 0);
@@ -744,9 +927,31 @@
       const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : sourceImage;
       ctx.drawImage(drawSource, 0, 0, canvas.width, canvas.height);
       ctx.filter = "none";
-      if (hasToneCurve) {
+      if (hasToneCurve || hasHslWork || hasCgWork || hasGrainWork) {
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        applyToneCurveToRgba(imgData.data, _cvData);
+        if (hasToneCurve) applyToneCurveToRgba(imgData.data, _cvData);
+        if (hasHslWork) applyHslWork(imgData.data);
+        if (hasCgWork) applyCgWork(imgData.data);
+        if (hasGrainWork) {
+          const timeMs = Date.now();
+          const w = canvas.width;
+          for (let i = 0, px = 0; i < imgData.data.length; i += 4, px++) {
+            const x = px % w;
+            const y = Math.floor(px / w);
+            const [r, g, b] = applyGrainToRgb(
+              imgData.data[i],
+              imgData.data[i + 1],
+              imgData.data[i + 2],
+              grainParams,
+              x,
+              y,
+              timeMs
+            );
+            imgData.data[i] = r;
+            imgData.data[i + 1] = g;
+            imgData.data[i + 2] = b;
+          }
+        }
         ctx.putImageData(imgData, 0, 0);
       }
       if (hasLut) {
@@ -847,11 +1052,9 @@
         cropW: 0,
         cropH: 0,
         dehaze: 0,
-        lens_corrections: { enabled: false, remove_baseline_exposure: 0, chromatic_aberration: 0, chromatic_aberration_x: 0, chromatic_aberration_y: 0 },
-        calibration: { shadow_tint: 0, saturation: 0 }
+        lens_corrections: { enabled: false, remove_baseline_exposure: 0, chromatic_aberration: 0, chromatic_aberration_x: 0, chromatic_aberration_y: 0 }
       });
       webglPipeline.setGrain({ amount: 0, size: 25 });
-      webglPipeline.setSplitToning({ shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 });
       webglPipeline.setHsl({}, null);
       webglPipeline.setCurves({
         rgb: [[0, 0], [255, 255]],
@@ -895,7 +1098,6 @@
         chromatic_aberration_x: 0,
         chromatic_aberration_y: 0
       },
-      calibration: state.calibration ?? { shadow_tint: 0, saturation: 0 },
       straighten: state.straighten ?? 0,
       cropX: state.crop?.x ?? 0,
       cropY: state.crop?.y ?? 0,
@@ -930,13 +1132,6 @@
       mode: state.cg_mode ?? "saturation"
     };
     webglPipeline.setHsl(hslData, colorGrading);
-    webglPipeline.setSplitToning({
-      shadows_hue: state.st_shadows_hue ?? 0,
-      shadows_saturation: state.st_shadows_saturation ?? 0,
-      highlights_hue: state.st_highlights_hue ?? 0,
-      highlights_saturation: state.st_highlights_saturation ?? 0,
-      balance: state.st_balance ?? 0
-    });
     webglPipeline.setGrain({
       amount: state.grain_amount ?? 0,
       size: state.grain_size ?? 25
@@ -1721,12 +1916,6 @@
     }
   });
   var PRESET_EXTRA_KEYS = [
-    // Split Toning
-    "st_balance",
-    "st_shadows_hue",
-    "st_shadows_saturation",
-    "st_highlights_hue",
-    "st_highlights_saturation",
     // Color Grading colours + mode
     "cg_mode",
     "cg_shadows_colour",
@@ -1864,15 +2053,6 @@
         const hsl = rgb2hsl255(c[0] ?? 128, c[1] ?? 128, c[2] ?? 128);
         setWheelPointer(w.id, hsl.h, hsl.s / 100);
       }
-    }
-    const ST_WHEELS = [
-      { id: "cw-st-shadows", h: "st_shadows_hue", s: "st_shadows_saturation" },
-      { id: "cw-st-highlights", h: "st_highlights_hue", s: "st_highlights_saturation" }
-    ];
-    for (const w of ST_WHEELS) {
-      const hue = state[w.h] ?? 0;
-      const sat = state[w.s] ?? 0;
-      setWheelPointer(w.id, hue, sat / 100);
     }
     const HSL_RANGES = {
       red: 0,
@@ -2067,8 +2247,7 @@
     if (lutSel) lutSel.value = "";
     activeLut = null;
     if (typeof window._cvReset === "function") window._cvReset();
-    resetKeys(["dehaze", "st_balance", "grain_amount", "grain_size"]);
-    resetStWheels();
+    resetKeys(["dehaze", "grain_amount", "grain_size"]);
     resetCgKeys();
     draw();
   };
@@ -2079,19 +2258,12 @@
   document.getElementById("btn-reset-tone").onclick = () => resetKeys(["highlights", "shadows", "whites", "blacks"]);
   document.getElementById("btn-reset-color").onclick = () => resetKeys(["saturation", "temp", "tint"]);
   document.getElementById("btn-reset-fx").onclick = () => {
-    resetKeys(["sharpen", "vignette", "dehaze", "st_balance", "grain_amount", "grain_size"]);
-    resetStWheels();
+    resetKeys(["sharpen", "vignette", "dehaze", "grain_amount", "grain_size"]);
     resetCgKeys();
     draw();
   };
   var btnResetCg = document.getElementById("btn-reset-cg");
   if (btnResetCg) btnResetCg.onclick = () => resetCgKeys();
-  var btnResetSt = document.getElementById("btn-reset-st");
-  if (btnResetSt) btnResetSt.onclick = () => {
-    resetKeys(["st_balance"]);
-    resetStWheels();
-    draw();
-  };
   var btnResetHsl = document.getElementById("btn-reset-hsl");
   if (btnResetHsl) btnResetHsl.onclick = () => {
     resetCgKeys();
@@ -2193,22 +2365,6 @@
     });
     if (typeof drawWebGL === "function") drawWebGL();
     if (typeof draw === "function") draw();
-  }
-  function resetStWheels() {
-    state.st_shadows_hue = 0;
-    state.st_shadows_saturation = 0;
-    state.st_highlights_hue = 0;
-    state.st_highlights_saturation = 0;
-    resetWheelPointer("cw-st-shadows");
-    resetWheelPointer("cw-st-highlights");
-    ["st_shadows_hue", "st_shadows_saturation", "st_highlights_hue", "st_highlights_saturation"].forEach((k) => {
-      const sl = document.querySelector('[data-key="' + k + '"] input[type="range"]');
-      const val = document.querySelector('[data-key="' + k + '"] .val');
-      if (sl) {
-        sl.value = "0";
-        if (val) val.textContent = "0";
-      }
-    });
   }
   document.querySelectorAll(".cg-hsl-slider").forEach((sl) => {
     sl.addEventListener("input", () => {
@@ -2413,12 +2569,14 @@
     });
     initFromState();
   }
-  makeColorWheel(document.getElementById("cw-cg-shadows-colour"), { stateKey: "cg_shadows_colour" });
-  makeColorWheel(document.getElementById("cw-cg-midtones-colour"), { stateKey: "cg_midtones_colour" });
-  makeColorWheel(document.getElementById("cw-cg-highlights-colour"), { stateKey: "cg_highlights_colour" });
-  makeColorWheel(document.getElementById("cw-cg-global-colour"), { stateKey: "cg_global_colour" });
-  makeColorWheel(document.getElementById("cw-st-shadows"), { stHueKey: "st_shadows_hue", stSatKey: "st_shadows_saturation" });
-  makeColorWheel(document.getElementById("cw-st-highlights"), { stHueKey: "st_highlights_hue", stSatKey: "st_highlights_saturation" });
+  var cgWheel = (id, opts) => {
+    const el = document.getElementById(id);
+    if (el) makeColorWheel(el, opts);
+  };
+  cgWheel("cw-cg-shadows-colour", { stateKey: "cg_shadows_colour" });
+  cgWheel("cw-cg-midtones-colour", { stateKey: "cg_midtones_colour" });
+  cgWheel("cw-cg-highlights-colour", { stateKey: "cg_highlights_colour" });
+  cgWheel("cw-cg-global-colour", { stateKey: "cg_global_colour" });
   ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"].forEach((rng) => {
     const el = document.getElementById("cw-hsl-" + rng);
     if (el) makeColorWheel(el, { hslRange: rng });
@@ -2465,15 +2623,6 @@
       const lensCb = document.getElementById("raw-lens-on");
       if (lensCb) lensCb.checked = false;
       state.lens_corrections = { enabled: false, remove_baseline_exposure: 0, chromatic_aberration: 0, chromatic_aberration_x: 0, chromatic_aberration_y: 0 };
-      document.querySelectorAll('.slider[data-key^="lens_corrections."]').forEach((wrap) => {
-        const input = wrap.querySelector("input");
-        const valEl = wrap.querySelector(".val");
-        const key = wrap.dataset.key || "";
-        const nestedKey = key.split(".")[1];
-        const v = nestedKey ? (state.lens_corrections || {})[nestedKey] ?? 0 : 0;
-        if (input) input.value = String(v);
-        if (valEl) valEl.textContent = String(v);
-      });
     };
   }
   var lensCbEl = document.getElementById("raw-lens-on");
@@ -2485,22 +2634,6 @@
       scheduleDraw();
       scheduleRawPreviewFetch("lens");
     });
-  }
-  var btnResetCalib = document.getElementById("btn-reset-calibration");
-  if (btnResetCalib) {
-    btnResetCalib.onclick = () => {
-      state.calibration = { shadow_tint: 0, saturation: 0 };
-      document.querySelectorAll('.slider[data-key^="calibration."]').forEach((wrap) => {
-        const input = wrap.querySelector("input");
-        const valEl = wrap.querySelector(".val");
-        const key = wrap.dataset.key || "";
-        const nestedKey = key.split(".")[1];
-        const v = nestedKey ? (state.calibration || {})[nestedKey] ?? 0 : 0;
-        if (input) input.value = String(v);
-        if (valEl) valEl.textContent = String(v);
-      });
-      scheduleDraw();
-    };
   }
   var cropBox = null;
   var dragMode = null;

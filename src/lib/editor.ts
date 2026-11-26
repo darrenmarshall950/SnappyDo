@@ -1,5 +1,11 @@
 import { isFlat, applyToneCurveToRgba } from "./curve";
 import { buildRenderRecipe } from "./render-recipe";
+// Effects that the desktop 2D preview path was missing. The server render
+// (src/pages/api/images/[id]/edit.ts) applies all of these; the browser
+// preview applied none of them, so Grain and the whole Colour Grading / HSL
+// Mixer section looked completely dead while editing.
+import { applyGrainToRgb } from "./effects";
+import { applyHslToRgb, applyColorGradingToRgb, isHslFlat } from "./hsl";
       const RAW_DEFAULTS = {
         raw_wb_kelvin: 5500,
         raw_wb_tint: 0,
@@ -837,6 +843,55 @@ import { buildRenderRecipe } from "./render-recipe";
           ctx.rect(cx, cy, cw, ch);
           ctx.clip();
         }
+        // ---- Effects the desktop 2D path must apply ----------------------
+        // Mirrors the server render order in edit.ts:
+        //   sliders -> HSWB -> HSL -> colour grading -> split toning ->
+        //   tone curve -> grain -> calibration -> spots -> LUT -> vignette
+        // The desktop path applies the sliders via ctx.filter, so the pixel
+        // passes below run on the already-filtered canvas.
+        const hslDataForPreview: Record<string, { h: number; s: number; l: number }> = {};
+        for (const range of ['red','orange','yellow','green','aqua','blue','purple','magenta']) {
+          const key = 'hsl_' + range;
+          const v = (state as any)[key];
+          hslDataForPreview[key] = v && typeof v === 'object'
+            ? { h: v.h ?? 0, s: v.s ?? 0, l: v.l ?? 0 }
+            : { h: 0, s: 0, l: 0 };
+        }
+        const cgParamsForPreview = {
+          shadows_colour: (state as any).cg_shadows_colour ?? [128, 128, 128],
+          midtones_colour: (state as any).cg_midtones_colour ?? [128, 128, 128],
+          highlights_colour: (state as any).cg_highlights_colour ?? [128, 128, 128],
+          global_colour: (state as any).cg_global_colour ?? [128, 128, 128],
+          shadows_intensity: (state as any).cg_shadows_intensity ?? 0,
+          midtones_intensity: (state as any).cg_midtones_intensity ?? 0,
+          highlights_intensity: (state as any).cg_highlights_intensity ?? 0,
+          global_intensity: (state as any).cg_global_intensity ?? 0,
+          mode: (state as any).cg_mode ?? 'saturation',
+        };
+        const grainParams = {
+          amount: (state as any).grain_amount ?? 0,
+          size: (state as any).grain_size ?? 25,
+        };
+        const hasHslWork = !isHslFlat(hslDataForPreview);
+        const hasCgWork =
+          cgParamsForPreview.shadows_intensity > 0 ||
+          cgParamsForPreview.midtones_intensity > 0 ||
+          cgParamsForPreview.highlights_intensity > 0 ||
+          cgParamsForPreview.global_intensity > 0;
+        const hasGrainWork = grainParams.amount > 0;
+        const applyHslWork = (data: Uint8ClampedArray) => {
+          for (let i = 0; i < data.length; i += 4) {
+            const [r, g, b] = applyHslToRgb(data[i], data[i+1], data[i+2], hslDataForPreview);
+            data[i] = r; data[i+1] = g; data[i+2] = b;
+          }
+        };
+        const applyCgWork = (data: Uint8ClampedArray) => {
+          for (let i = 0; i < data.length; i += 4) {
+            const [r, g, b] = applyColorGradingToRgb(data[i], data[i+1], data[i+2], cgParamsForPreview);
+            data[i] = r; data[i+1] = g; data[i+2] = b;
+          }
+        };
+
         // === Pipeline ===
         // First, decide what we need:
         //  - noLut / noSharpen / noSliders → fast path: just draw the source
@@ -896,9 +951,28 @@ import { buildRenderRecipe } from "./render-recipe";
           const drawSource = hasSharpen ? getSharpenedSource(state.sharpen) : sourceImage;
           ctx.drawImage(drawSource, 0, 0, canvas.width, canvas.height);
           ctx.filter = 'none';
-          if (hasToneCurve) {
+          // The effects below need pixel access, so the canvas filter chain
+          // and the pixel passes cannot share one draw. If any of them is
+          // active we re-read the canvas and run them here.
+          if (hasToneCurve || hasHslWork || hasCgWork || hasGrainWork) {
             const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            applyToneCurveToRgba(imgData.data, _cvData);
+            if (hasToneCurve) applyToneCurveToRgba(imgData.data, _cvData);
+            if (hasHslWork) applyHslWork(imgData.data);
+            if (hasCgWork) applyCgWork(imgData.data);
+            if (hasGrainWork) {
+              // applyGrainToRgb is per-pixel and needs the pixel's x/y plus a
+              // time seed, matching how the server render calls it.
+              const timeMs = Date.now();
+              const w = (canvas as HTMLCanvasElement).width;
+              for (let i = 0, px = 0; i < imgData.data.length; i += 4, px++) {
+                const x = px % w;
+                const y = Math.floor(px / w);
+                const [r, g, b] = applyGrainToRgb(
+                  imgData.data[i], imgData.data[i+1], imgData.data[i+2],
+                  grainParams, x, y, timeMs);
+                imgData.data[i] = r; imgData.data[i+1] = g; imgData.data[i+2] = b;
+              }
+            }
             ctx.putImageData(imgData, 0, 0);
           }
           if (hasLut) {
@@ -999,11 +1073,9 @@ import { buildRenderRecipe } from "./render-recipe";
             straighten: 0, cropX: 0, cropY: 0, cropW: 0, cropH: 0,
             dehaze: 0,
             lens_corrections: { enabled: false, remove_baseline_exposure: 0, chromatic_aberration: 0, chromatic_aberration_x: 0, chromatic_aberration_y: 0 },
-            calibration: { shadow_tint: 0, saturation: 0 },
           });
-          // Neutralise the per-effect setters too (grain, split toning, HSL, CG, curves)
+          // Neutralise the per-effect setters too (grain, HSL, CG, curves)
           webglPipeline.setGrain({ amount: 0, size: 25 });
-          webglPipeline.setSplitToning({ shadows_hue: 0, shadows_saturation: 0, highlights_hue: 0, highlights_saturation: 0, balance: 0 });
           webglPipeline.setHsl({}, null);
           // Identity curves = linear pass-through
           webglPipeline.setCurves({
@@ -1060,7 +1132,6 @@ import { buildRenderRecipe } from "./render-recipe";
             enabled: false, remove_baseline_exposure: 0,
             chromatic_aberration: 0, chromatic_aberration_x: 0, chromatic_aberration_y: 0,
           },
-          calibration: (state as any).calibration ?? { shadow_tint: 0, saturation: 0 },
           straighten: (state as any).straighten ?? 0,
           cropX: (state as any).crop?.x ?? 0,
           cropY: (state as any).crop?.y ?? 0,
@@ -1099,15 +1170,6 @@ import { buildRenderRecipe } from "./render-recipe";
           mode: ((state as any).cg_mode as 'saturation' | 'luminance') ?? 'saturation',
         };
         webglPipeline.setHsl(hslData, colorGrading);
-
-        // Split Toning
-        webglPipeline.setSplitToning({
-          shadows_hue: (state as any).st_shadows_hue ?? 0,
-          shadows_saturation: (state as any).st_shadows_saturation ?? 0,
-          highlights_hue: (state as any).st_highlights_hue ?? 0,
-          highlights_saturation: (state as any).st_highlights_saturation ?? 0,
-          balance: (state as any).st_balance ?? 0,
-        });
 
         // Grain
         webglPipeline.setGrain({
@@ -1252,9 +1314,6 @@ webglPipeline.render();
           saturation: 'Saturation', temp: 'Temperature', tint: 'Tint',
           sharpen: 'Sharpen', vignette: 'Vignette', dehaze: 'Dehaze',
           lut_intensity: 'LUT Intensity',
-          st_shadows_hue: 'ST Shadows Hue', st_shadows_saturation: 'ST Shadows Sat',
-          st_highlights_hue: 'ST Highlights Hue', st_highlights_saturation: 'ST Highlights Sat',
-          st_balance: 'ST Balance',
           grain_amount: 'Grain Amount', grain_size: 'Grain Size',
           straighten: 'Straighten',
         };
@@ -2055,9 +2114,6 @@ webglPipeline.render();
 
       // Extended preset keys: base sliders + ST/CG/HSL/grain/dehaze
       const PRESET_EXTRA_KEYS = [
-        // Split Toning
-        'st_balance', 'st_shadows_hue', 'st_shadows_saturation',
-        'st_highlights_hue', 'st_highlights_saturation',
         // Color Grading colours + mode
         'cg_mode',
         'cg_shadows_colour', 'cg_midtones_colour', 'cg_highlights_colour', 'cg_global_colour',
@@ -2213,16 +2269,6 @@ webglPipeline.render();
             const hsl = rgb2hsl255(c[0] ?? 128, c[1] ?? 128, c[2] ?? 128);
             setWheelPointer(w.id, hsl.h, hsl.s / 100);
           }
-        }
-        // ST wheels
-        const ST_WHEELS = [
-          { id: 'cw-st-shadows', h: 'st_shadows_hue', s: 'st_shadows_saturation' },
-          { id: 'cw-st-highlights', h: 'st_highlights_hue', s: 'st_highlights_saturation' },
-        ];
-        for (const w of ST_WHEELS) {
-          const hue = (state as any)[w.h] ?? 0;
-          const sat = (state as any)[w.s] ?? 0;
-          setWheelPointer(w.id, hue, sat / 100);
         }
         // HSL wheels: convert slider {h,s,l} back to wheel position
         const HSL_RANGES: Record<string, number> = {
@@ -2427,9 +2473,8 @@ webglPipeline.render();
         activeLut = null;
         // Reset tone curve shape (channel points + active channel)
         if (typeof (window as any)._cvReset === 'function') (window as any)._cvReset();
-        // Reset effects (dehaze, split toning, grain), CG colours, HSL
-        resetKeys(['dehaze','st_balance','grain_amount','grain_size']);
-        resetStWheels();  // Resets ST state + wheel pointers
+        // Reset effects (dehaze, grain), CG colours, HSL
+        resetKeys(['dehaze','grain_amount','grain_size']);
         resetCgKeys();
         draw();
       };
@@ -2440,17 +2485,14 @@ webglPipeline.render();
       document.getElementById('btn-reset-tone').onclick = () => resetKeys(['highlights','shadows','whites','blacks']);
       document.getElementById('btn-reset-color').onclick = () => resetKeys(['saturation','temp','tint']);
       document.getElementById('btn-reset-fx').onclick = () => {
-  resetKeys(['sharpen','vignette','dehaze','st_balance','grain_amount','grain_size']);
-  resetStWheels();
+  resetKeys(['sharpen','vignette','dehaze','grain_amount','grain_size']);
   resetCgKeys();
   draw();
 };
       // Wire the Color Grading section reset button (resets CG colours + HSL)
       const btnResetCg = document.getElementById('btn-reset-cg');
       if (btnResetCg) btnResetCg.onclick = () => resetCgKeys();
-      // Wire any per-section reset buttons for Split Toning + HSL if present
-      const btnResetSt = document.getElementById('btn-reset-st');
-      if (btnResetSt) btnResetSt.onclick = () => { resetKeys(['st_balance']); resetStWheels(); draw(); };
+      // Wire the optional per-section HSL reset button, if present
       const btnResetHsl = document.getElementById('btn-reset-hsl');
       if (btnResetHsl) btnResetHsl.onclick = () => { resetCgKeys(); draw(); }; // resets HSL too
 
@@ -2542,21 +2584,6 @@ webglPipeline.render();
         });
         if (typeof drawWebGL === 'function') drawWebGL();
         if (typeof draw === 'function') draw();
-      }
-
-      function resetStWheels() {
-        // Reset Split Toning wheels + their underlying state
-        state.st_shadows_hue = 0;
-        state.st_shadows_saturation = 0;
-        state.st_highlights_hue = 0;
-        state.st_highlights_saturation = 0;
-        resetWheelPointer('cw-st-shadows');
-        resetWheelPointer('cw-st-highlights');
-        ['st_shadows_hue','st_shadows_saturation','st_highlights_hue','st_highlights_saturation'].forEach((k) => {
-          const sl = document.querySelector('[data-key="' + k + '"] input[type="range"]') as HTMLInputElement;
-          const val = document.querySelector('[data-key="' + k + '"] .val');
-          if (sl) { sl.value = '0'; if (val) val.textContent = '0'; }
-        });
       }
 
       // Wire HSL sliders
@@ -2752,14 +2779,20 @@ webglPipeline.render();
       }
 
       // Wire visual colour wheels for Color Grading
-      makeColorWheel(document.getElementById('cw-cg-shadows-colour')!, { stateKey: 'cg_shadows_colour' });
-      makeColorWheel(document.getElementById('cw-cg-midtones-colour')!, { stateKey: 'cg_midtones_colour' });
-      makeColorWheel(document.getElementById('cw-cg-highlights-colour')!, { stateKey: 'cg_highlights_colour' });
-      makeColorWheel(document.getElementById('cw-cg-global-colour')!, { stateKey: 'cg_global_colour' });
+      // NOTE: the non-null assertion on getElementById() is compile-time only —
+      // it does NOT protect against an element that is absent at runtime. A
+      // missing wheel used to throw here and kill the whole editor script
+      // (no state, no draw, every slider dead). Always guard.
+      const cgWheel = (id: string, opts: any) => {
+        const el = document.getElementById(id);
+        if (el) makeColorWheel(el as any, opts);
+      };
+      cgWheel('cw-cg-shadows-colour', { stateKey: 'cg_shadows_colour' });
+      cgWheel('cw-cg-midtones-colour', { stateKey: 'cg_midtones_colour' });
+      cgWheel('cw-cg-highlights-colour', { stateKey: 'cg_highlights_colour' });
+      cgWheel('cw-cg-global-colour', { stateKey: 'cg_global_colour' });
 
       // Wire visual colour wheels for Split Toning (each combines hue+saturation)
-      makeColorWheel(document.getElementById('cw-st-shadows')!, { stHueKey: 'st_shadows_hue', stSatKey: 'st_shadows_saturation' });
-      makeColorWheel(document.getElementById('cw-st-highlights')!, { stHueKey: 'st_highlights_hue', stSatKey: 'st_highlights_saturation' });
 
       // Wire visual colour wheels for HSL Mixer (one per range)
       ['red','orange','yellow','green','aqua','blue','purple','magenta'].forEach((rng) => {
@@ -2812,16 +2845,11 @@ webglPipeline.render();
           }
           const lensCb = document.getElementById('raw-lens-on');
           if (lensCb) lensCb.checked = false;
+          // The fine lens-correction sliders (baseline exposure, chromatic
+          // aberration) are no longer exposed in the UI, but the state key
+          // stays so older saved edits still render. The "Auto lens
+          // corrections" toggle is the only control that remains.
           state.lens_corrections = { enabled: false, remove_baseline_exposure: 0, chromatic_aberration: 0, chromatic_aberration_x: 0, chromatic_aberration_y: 0 };
-          document.querySelectorAll('.slider[data-key^="lens_corrections."]').forEach((wrap) => {
-            const input = wrap.querySelector('input');
-            const valEl = wrap.querySelector('.val');
-            const key = wrap.dataset.key || '';
-            const nestedKey = key.split('.')[1];
-            const v = nestedKey ? (state.lens_corrections || {})[nestedKey] ?? 0 : 0;
-            if (input) input.value = String(v);
-            if (valEl) valEl.textContent = String(v);
-          });
         };
       }
       // Wire the lens checkbox to state
@@ -2837,23 +2865,6 @@ webglPipeline.render();
       }
 
 
-      // Calibration reset
-      const btnResetCalib = document.getElementById('btn-reset-calibration');
-      if (btnResetCalib) {
-        btnResetCalib.onclick = () => {
-          state.calibration = { shadow_tint: 0, saturation: 0 };
-          document.querySelectorAll(".slider[data-key^=\"calibration.\"]").forEach((wrap) => {
-            const input = wrap.querySelector("input");
-            const valEl = wrap.querySelector(".val");
-            const key = wrap.dataset.key || "";
-            const nestedKey = key.split(".")[1];
-            const v = nestedKey ? (state.calibration || {})[nestedKey] ?? 0 : 0;
-            if (input) input.value = String(v);
-            if (valEl) valEl.textContent = String(v);
-          });
-          scheduleDraw();
-        };
-      }
 
       // ---- Crop drag (works on the canvas) ----
       let cropBox = null;       // { x, y, w, h } in canvas pixels

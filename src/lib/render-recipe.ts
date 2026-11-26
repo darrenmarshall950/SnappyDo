@@ -16,7 +16,11 @@ const UI_ONLY_KEYS = new Set([
 ]);
 
 function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
+  // JSON.stringify(undefined) returns undefined, and JSON.parse(undefined)
+  // throws "undefined is not valid JSON". Guard it — a single undefined
+  // value in the recipe must not take down the whole render.
+  const json = JSON.stringify(value);
+  return (json === undefined ? undefined : JSON.parse(json)) as T;
 }
 
 /**
@@ -28,6 +32,8 @@ export function buildRenderRecipe(state: Record<string, unknown>, curve: unknown
   for (const [key, value] of Object.entries(state || {})) {
     if (!UI_ONLY_KEYS.has(key) && value !== undefined) params[key] = clone(value);
   }
-  params.curve = clone(curve);
+  // The curve may be absent (no tone curve in the editor yet). Only include
+  // it when there is something to include.
+  if (curve !== undefined) params.curve = clone(curve);
   return { version: 1, params: params as RenderParams };
 }
